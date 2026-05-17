@@ -2,9 +2,9 @@
   "name": "Schneider Odace SFSP",
   "description": "Intégration Home Assistant pour les modules Schneider Odace SFSP (lights, switches, etc.).",
   "homeassistant": "2026.4.0",
-  "url": https://github.com/slemeur91/odace_sfsp,
+  "url": "https://github.com/slemeur91/odace_sfsp",
   "category": "integration",
   "iot_class": "local_polling",
-  "dependencies": ],
-  "version": "1.0.0",
+  "dependencies": [],
+  "version": "1.0.0"
 }
