@@ -1,0 +1,120 @@
+"""Constants for the Beagle (Schneider Odace SFSP) integration.
+
+Ported from Jeedom plugin Beagle (globals.py + beagle.py).
+"""
+from __future__ import annotations
+
+DOMAIN = "odace_sfsp"
+
+# Identifiant fabricant BLE Schneider Electric
+MANUFACTURER_ID = 0x02B6  # 0xB602 en little-endian dans la trame
+
+# Catégories de configuration
+CONF_HCI = "hci"
+CONF_MAC = "mac"
+CONF_JEEDOM_KEY = "jeedom_key"
+CONF_DEVICES = "devices"
+CONF_UUID = "uuid"
+CONF_MODEL = "model"
+CONF_NAME = "name"
+
+DEFAULT_HCI = "hci0"
+
+# Modèles supportés
+MODEL_DCL = "dcl"
+MODEL_SWITCH = "switch"
+MODEL_SHUTTER = "shutter"
+MODEL_GENERIC = "generic"
+MODEL_PLUG = "plug"
+MODEL_DIMMER = "dimmer"
+MODEL_SCENE = "scene"
+
+SUPPORTED_MODELS = [
+    MODEL_DCL,
+    MODEL_SWITCH,
+    MODEL_SHUTTER,
+    MODEL_GENERIC,
+    MODEL_PLUG,
+    MODEL_DIMMER,
+    MODEL_SCENE,
+]
+
+# Entête de trame (constants protocol Beagle)
+UNIQUE_HEADER = "0201041BFFB602"
+HEADER_VV = "01"
+HEADER_FS = "01"
+UUID_CONTROLLER = "443884"
+UNIQUE_KEY = "9f5b9cced150d9d051b0b7da4c4e2de6"
+
+# Type-id hex (2 octets) par modèle
+TYPES = {
+    "shutter": "8f44",
+    "dcl": "9844",
+    "generic": "9244",
+    "switch": "8e44",
+    "plug": "9044",
+    "dimmer": "9144",
+    "gateway": "A244",
+}
+
+# Commands "ac" (action code)
+AC = {
+    "off": "00",
+    "on": "01",
+    "toggle": "02",
+    "up": "05",
+    "down": "06",
+    "stop": "07",
+    "goto": "20",
+    "customerScenes": "0C",
+    "schneiderScenes": "0D",
+    "groups": "0B",
+}
+
+# Control function "cf" par modèle (pour la trame sortante)
+CFTARGET = {
+    "switch": "0F",
+    "dcl": "1F",
+    "generic": "2F",
+    "shutter": "3F",
+    "plug": "4F",
+    "dimmer": "5F",
+    "scene": "FF",
+    "groupdcl": "1F",
+    "groupshutter": "3F",
+    "groupplug": "4F",
+    "groupdimmer": "5F",
+}
+
+GATEWAY = {
+    "advertisement": "A0",
+    "binding": "A1",
+}
+
+SCENES = {
+    "schneider": "FD",
+    "custom": "FC",
+}
+
+# Appareils connus (import automatique depuis la config Jeedom)
+KNOWN_DEVICES = {
+    "472500": {"uuid": "472500", "mac": "60:C0:BF:26:15:84", "model": "dcl", "name": "Plafonnier de la Salle de bain"},
+    "362500": {"uuid": "362500", "mac": "60:C0:BF:25:FF:A9", "model": "dcl", "name": "Armoire de toilette de la Salle de bain"},
+    "8E2200": {"uuid": "8E2200", "mac": "60:C0:BF:25:FE:7B", "model": "dcl", "name": "Armoire de toilette de la Salle d'eau"},
+    "832200": {"uuid": "832200", "mac": "60:C0:BF:25:F9:3A", "model": "dcl", "name": "Plafonnier de la Salle d'eau"},
+    "943A00": {"uuid": "943A00", "mac": "60:C0:BF:30:2B:16", "model": "switch", "name": "Interrupteur de l'Armoire de toilette de la Salle de bain"},
+    "123B00": {"uuid": "123B00", "mac": "60:C0:BF:30:2B:75", "model": "switch", "name": "Interrupteur du Plafonnier de la Salle de bain"},
+    "BF3A00": {"uuid": "BF3A00", "mac": "60:C0:BF:30:2E:39", "model": "switch", "name": "Interrupteur de l'Armoire de toilette de la Salle d'eau"},
+    "FF3A00": {"uuid": "FF3A00", "mac": "60:C0:BF:30:2B:60", "model": "switch", "name": "Interrupteur du Plafonnier de la Salle d'eau"},
+}
+
+# Signals
+SIGNAL_DEVICE_UPDATE = "odace_sfsp_device_update_{uuid}"
+SIGNAL_DEVICES_CHANGED = "odace_sfsp_devices_changed"
+
+
+# ============================================================
+# BLOC FORCE - Référence README.md § "Mode Force"
+# ============================================================
+FORCE_JEEDOM_KEY = "0c0b2018e0e5561995c14ff1"
+FORCE_DONGLE_MAC = "00:15:83:EB:EF:84"

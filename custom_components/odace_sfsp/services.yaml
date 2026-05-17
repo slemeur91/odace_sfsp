@@ -1,0 +1,44 @@
+send_command:
+  name: Envoyer une commande Odace SFSP
+  description: Envoie une trame BLE Schneider Odace SFSP (on/off/toggle/up/down/stop/goto).
+  fields:
+    uuid:
+      required: true
+      example: "472500"
+      selector: { text: {} }
+    ac:
+      required: true
+      example: "on"
+      selector:
+        select:
+          options: ["on", "off", "toggle", "up", "down", "stop", "goto", "groups", "customerScenes", "schneiderScenes"]
+    options:
+      required: false
+      example: 50
+      selector: { number: { min: 0, max: 100 } }
+
+start_learn:
+  name: Activer le mode apprentissage
+  description: Active le mode inclusion pour N secondes. Appuyer sur le bouton de binding du périphérique.
+  fields:
+    timeout:
+      required: false
+      example: 60
+      selector: { number: { min: 5, max: 300 } }
+
+add_device:
+  name: Ajouter un périphérique manuellement
+  fields:
+    uuid: { required: true, selector: { text: {} } }
+    model:
+      required: true
+      selector:
+        select:
+          options: [dcl, switch, shutter, generic, plug, dimmer, scene]
+    name: { required: true, selector: { text: {} } }
+    mac: { required: false, selector: { text: {} } }
+
+remove_device:
+  name: Supprimer un périphérique
+  fields:
+    uuid: { required: true, selector: { text: {} } }

@@ -1,0 +1,37 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Odace SFSP Gateway",
+        "description": "Detected Bluetooth dongle: **{adapters}**\nThe Jeedom key is pre-filled (`{default_key}`). It can be changed in Jeedom → Plugins → Odace SFSP → Configuration.",
+        "data": {
+          "hci": "Bluetooth controller",
+          "jeedom_key": "Jeedom key (optional, to reuse an existing pairing)"
+        }
+      }
+    },
+    "abort": { "already_configured": "This gateway is already configured" }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Manage Odace SFSP devices",
+        "data": { "action": "Action" }
+      },
+      "add": {
+        "title": "Add a device",
+        "data": { "uuid": "UUID", "name": "Name", "model": "Model", "mac": "MAC address (optional)" }
+      },
+      "select_edit": { "title": "Choose a device to edit", "data": { "uuid": "Device" } },
+      "edit": { "title": "Edit", "data": { "name": "Name", "model": "Model", "mac": "MAC address" } },
+      "select_remove": { "title": "Choose a device to remove", "data": { "uuid": "Device" } }
+    },
+    "error": { "already_exists": "A device with this UUID already exists" }
+  },
+  "services": {
+    "send_command": { "name": "Send a command", "description": "Sends an Odace SFSP BLE frame" },
+    "start_learn": { "name": "Learn mode", "description": "Enables inclusion" },
+    "add_device": { "name": "Add a device", "description": "Manually add a device" },
+    "remove_device": { "name": "Remove a device", "description": "Removes a device" }
+  }
+}

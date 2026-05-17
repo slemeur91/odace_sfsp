@@ -1,0 +1,14 @@
+{
+  "domain": "odace_sfsp",
+  "name": "Schneider Odace SFSP",
+  "version": "1.0.0",
+  "codeowners": ["@sylvain"],
+  "config_flow": true,
+  "dependencies": ["bluetooth"],
+  "documentation": "https://github.com/sylvain/ha-odace_sfsp",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/sylvain/ha-odace_sfsp/issues",
+  "requirements": [],
+  "integration_type": "hub",
+  "loggers": ["custom_components.odace_sfsp"]
+}

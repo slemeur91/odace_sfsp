@@ -1,0 +1,37 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Gateway Odace SFSP",
+        "description": "Dongle Bluetooth détecté : **{adapters}**\nLa clé Jeedom est pré-remplie (`{default_key}`). Modifiable dans Jeedom → Plugins → Odace SFSP → Configuration.",
+        "data": {
+          "hci": "Contrôleur Bluetooth",
+          "jeedom_key": "Clé Jeedom (optionnel, pour réutiliser un appairage existant)"
+        }
+      }
+    },
+    "abort": { "already_configured": "Cette gateway est déjà configurée" }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Gérer les périphériques Odace SFSP",
+        "data": { "action": "Action" }
+      },
+      "add": {
+        "title": "Ajouter un périphérique",
+        "data": { "uuid": "UUID", "name": "Nom", "model": "Modèle", "mac": "Adresse MAC (optionnel)" }
+      },
+      "select_edit": { "title": "Choisir un périphérique à modifier", "data": { "uuid": "Périphérique" } },
+      "edit": { "title": "Modifier", "data": { "name": "Nom", "model": "Modèle", "mac": "Adresse MAC" } },
+      "select_remove": { "title": "Choisir un périphérique à supprimer", "data": { "uuid": "Périphérique" } }
+    },
+    "error": { "already_exists": "Un périphérique avec cet UUID existe déjà" }
+  },
+  "services": {
+    "send_command": { "name": "Envoyer une commande", "description": "Envoie une trame BLE Odace SFSP" },
+    "start_learn": { "name": "Mode apprentissage", "description": "Active l'inclusion" },
+    "add_device": { "name": "Ajouter un périphérique", "description": "Ajoute manuellement" },
+    "remove_device": { "name": "Supprimer un périphérique", "description": "Supprime un périphérique" }
+  }
+}
