@@ -1,9 +1,8 @@
+# Schneider Odace SFSP (portage du plugin Jeedom 'beagle') — intégration Home Assistant
+
 [![GitHub Release][releases-shield]][releases]
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=flat-square)](https://github.com/hacs/integration)
 [![Maintainers](https://img.shields.io/badge/maintainers-@slemeur91-blue.svg?style=flat-square)](#)
-
-
-# Schneider Odace SFSP (portage du plugin Jeedom 'beagle') — intégration Home Assistant
 
 Portage avancé du plugin Jeedom `beagle` vers Home Assistant.
 Supporte les DCL (lumières pilotables), les switchs Odace (récepteurs), et
