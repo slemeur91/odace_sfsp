@@ -4,15 +4,15 @@ Portage avancé du plugin Jeedom `beagle` vers Home Assistant.
 Supporte les DCL (lumières pilotables), les switchs Odace (récepteurs), et
 laisse la porte ouverte aux modèles shutter / generic / plug / dimmer / scene.
 
-[!IMPORTANT]
-Ne disposant que de DCL et switchs je n'ai pas pu tester les autre composants.
-Et ne souhaitant pas refaire l'apprentissage cette partie non plus n'a pas était testé.
-Le portage a était éffectué grâce à l'IA et je veux bien aider à enrichir le plugin si il y a des volontaires pour tester.
+> [!IMPORTANT]
+> Ne disposant que de DCL et switchs je n'ai pas pu tester les autre composants.
+> Et ne souhaitant pas refaire l'apprentissage cette partie non plus n'a pas était testé.
+> Le portage a était éffectué grâce à l'IA et je veux bien aider à enrichir le plugin si il y a des volontaires pour tester.
 
-[!TIP]
-Pour le fonctionnement j'ai repris le dongle Bluetooth ainsi que la JEEDOM_KEY de Jeedom.
-Il est possible de reprendre la clé JEEDOM_KEY (voir les logs de Jeedom) et l'adresse MAC du dongle Jeedom (même avec un autre dongle) : ce sont les 2 éléments qui servent pour l'associasion des périphériques.
-Ces informations peuvent être forcées dans le fichier const.py ainsi que la liste des périphériques afin qu'ils soient automatiquement renseignés lors du premier lancement de l'intégration.
+> [!TIP]
+> Pour le fonctionnement j'ai repris le dongle Bluetooth ainsi que la JEEDOM_KEY de Jeedom.
+> Il est possible de reprendre la clé JEEDOM_KEY (voir les logs de Jeedom) et l'adresse MAC du dongle Jeedom (même avec un autre dongle) : ce sont les 2 éléments qui servent pour l'associasion des périphériques.
+> Ces informations peuvent être forcées dans le fichier const.py ainsi que la liste des périphériques afin qu'ils soient automatiquement renseignés lors du premier lancement de l'intégration.
 
 ## Installation
 
