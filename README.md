@@ -9,8 +9,8 @@ Supporte les DCL (lumières pilotables), les switchs Odace (récepteurs), et
 laisse la porte ouverte aux modèles shutter / generic / plug / dimmer / scene.
 
 > [!IMPORTANT]
-> Ne disposant que de DCL et switchs je n'ai pas pu tester les autre composants.
-> Et ne souhaitant pas refaire l'apprentissage cette partie non plus n'a pas était testé.
+> Ne disposant que de DCL et switchs je n'ai pas pu tester les autres composants.
+> Et ne souhaitant pas refaire l'apprentissage cette partie non plus n'a pas était testée.
 > Le portage a était éffectué grâce à l'IA et je veux bien aider à enrichir le plugin si il y a des volontaires pour tester.
 
 > [!TIP]
