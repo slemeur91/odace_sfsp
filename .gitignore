@@ -1,0 +1,13 @@
+__pycache__
+pythonenv*
+.python-version
+.coverage
+venv
+.venv
+.DS_Store
+tests
+.ruff_cache
+
+# Home Assistant configuration
+config/*
+!config/configuration.yaml
