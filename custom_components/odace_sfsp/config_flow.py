@@ -38,57 +38,66 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
-def _get_adapter_address(adapter_name: str, details: Any) -> str:
-    """Extrait la MAC depuis un objet AdapterDetails (dataclass ou dict).
+def _get_adapter_address_sync(adapter_name: str, details: Any) -> str:
+    """Extrait la MAC depuis un objet AdapterDetails — sans I/O bloquant.
 
-    Si HA retourne une adresse vide ou nulle (cas fréquent sur Proxmox/VM
-    avant que BlueZ ait complètement initialisé l'adaptateur), on tente une
-    lecture directe depuis le sysfs Linux via ``read_controller_mac``.
+    Retourne une chaîne vide si l'adresse est absente ou nulle (le fallback
+    sysfs sera réalisé séparément dans un executor).
     """
-    # Extraction depuis HA
     if hasattr(details, "address"):
         address = details.address or ""
     elif isinstance(details, dict):
         address = details.get("address") or ""
     else:
         address = ""
-
-    # Fallback sysfs/hciconfig pour les dongles HCI natifs
-    if (not address or address == "00:00:00:00:00:00") and adapter_name.startswith("hci"):
-        address = read_controller_mac(adapter_name) or ""
-
-    return address.upper() if address else "00:00:00:00:00:00"
+    return address.upper() if address and address != "00:00:00:00:00:00" else ""
 
 
-def _list_hci_adapters(hass) -> Dict[str, str]:
+def _scan_sysfs_adapters() -> Dict[str, str]:
+    """Énumère les adaptateurs HCI depuis sysfs et lit leur MAC (exécution synchrone).
+
+    Destiné à être appelé via ``hass.async_add_executor_job`` uniquement.
+    """
+    import os
+    result: Dict[str, str] = {}
+    try:
+        for name in sorted(os.listdir("/sys/class/bluetooth/")):
+            if name.startswith("hci"):
+                address = read_controller_mac(name) or "00:00:00:00:00:00"
+                result[name] = f"{name} ({address})"
+    except Exception:
+        pass
+    return result
+
+
+async def _list_hci_adapters(hass) -> Dict[str, str]:
     """Retourne ``{adapter_name: 'name (MAC)'}`` pour tous les contrôleurs BLE connus.
 
     Couvre :
     - les dongles HCI natifs  (clé = "hci0", "hci1", …) — MAC lue depuis HA
-      ou en fallback depuis sysfs / hciconfig
+      ou en fallback depuis sysfs/hciconfig via executor
     - les proxies ESP32/ESPHome (clé = adresse MAC de l'ESP32)
 
-    La clé du dict renvoyé par ``async_get_adapters`` EST le nom de l'adaptateur ;
-    on itère sur ``.items()`` pour conserver ce nom.
+    Toutes les opérations I/O bloquantes (sysfs, hciconfig) sont déléguées
+    à ``hass.async_add_executor_job`` pour ne pas bloquer la boucle asyncio.
     """
     adapters: Dict[str, str] = {}
     try:
         for adapter_name, details in bluetooth.async_get_adapters(hass).items():
-            address = _get_adapter_address(adapter_name, details)
-            adapters[adapter_name] = f"{adapter_name} ({address})"
+            address = _get_adapter_address_sync(adapter_name, details)
+            # Adresse absente dans HA pour un dongle HCI natif → lire via executor
+            if not address and adapter_name.startswith("hci"):
+                address = (
+                    await hass.async_add_executor_job(read_controller_mac, adapter_name)
+                    or "00:00:00:00:00:00"
+                )
+            adapters[adapter_name] = f"{adapter_name} ({address or '00:00:00:00:00:00'})"
     except Exception as err:  # pragma: no cover
         _LOGGER.debug("Unable to list adapters via HA: %s", err)
 
-    # Dernier recours : énumération sysfs si HA n'a rien renvoyé
+    # Dernier recours : énumération sysfs entière via executor
     if not adapters:
-        try:
-            import os
-            for name in sorted(os.listdir("/sys/class/bluetooth/")):
-                if name.startswith("hci"):
-                    address = read_controller_mac(name) or "00:00:00:00:00:00"
-                    adapters[name] = f"{name} ({address})"
-        except Exception:
-            pass
+        adapters = await hass.async_add_executor_job(_scan_sysfs_adapters)
 
     if not adapters:
         adapters = {DEFAULT_HCI: f"{DEFAULT_HCI} (00:00:00:00:00:00)"}
@@ -101,7 +110,8 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     async def async_step_user(self, user_input: Dict[str, Any] | None = None) -> FlowResult:
-        adapters = _list_hci_adapters(self.hass)
+        # Toutes les I/O bloquantes (sysfs, hciconfig) sont dans l'executor via _list_hci_adapters
+        adapters = await _list_hci_adapters(self.hass)
 
         # Si FORCE_JEEDOM_KEY est défini, l'afficher à la place d'une clé générée
         default_jeedom_key = FORCE_JEEDOM_KEY if FORCE_JEEDOM_KEY else secrets.token_hex(12)
@@ -109,18 +119,16 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             hci_name = user_input[CONF_HCI]
 
-            # Résolution de la MAC : HA d'abord, puis sysfs/hciconfig via read_controller_mac
+            # Résolution de la MAC : HA d'abord (pas d'I/O), puis executor pour sysfs/hciconfig
             mac: str | None = None
             try:
                 ha_adapters = bluetooth.async_get_adapters(self.hass)
                 if hci_name in ha_adapters:
-                    mac = _get_adapter_address(hci_name, ha_adapters[hci_name])
-                    if mac == "00:00:00:00:00:00":
-                        mac = None
+                    mac = _get_adapter_address_sync(hci_name, ha_adapters[hci_name]) or None
             except Exception:
                 pass
             if not mac:
-                mac = read_controller_mac(hci_name)
+                mac = await self.hass.async_add_executor_job(read_controller_mac, hci_name)
 
             mac = mac or "00:00:00:00:00:00"
 
