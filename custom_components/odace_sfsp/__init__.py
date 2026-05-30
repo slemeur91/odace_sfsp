@@ -2,11 +2,7 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
-from aiohttp import web
-
-from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
@@ -18,68 +14,6 @@ from .coordinator import OdaceSFSPCoordinator
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.LIGHT, Platform.EVENT, Platform.COVER, Platform.SWITCH]
-
-# Le frontend HA charge l'icône de marque via plusieurs URL selon le contexte :
-#   icon.png      → carte intégration (panneau Appareils & Services)
-#   logo.png      → page de détail de l'intégration / appareil
-#   icon@2x.png   → variante haute résolution de l'icône
-#   logo@2x.png   → variante haute résolution du logo
-# On enregistre une vue pour chacune afin de couvrir tous les emplacements.
-_BRAND_ASSETS = ["icon.png", "logo.png", "icon@2x.png", "logo@2x.png"]
-
-
-def _make_brand_view(asset: str, icon_data: bytes) -> HomeAssistantView:
-    """Fabrique une HomeAssistantView pour une URL de marque donnée."""
-    safe_name = asset.replace(".", "_").replace("@", "_at_")
-
-    class _BrandView(HomeAssistantView):
-        url = f"/api/brands/integration/{DOMAIN}/{asset}"
-        name = f"api:brands:integration:{DOMAIN}:{safe_name}"
-        requires_auth = False
-
-        async def get(self, request: web.Request) -> web.Response:
-            return web.Response(
-                body=icon_data,
-                content_type="image/png",
-                headers={"Cache-Control": "no-cache, no-store"},
-            )
-
-    return _BrandView()
-
-
-async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Enregistre les vues HTTP de l'icône de marque.
-
-    Le frontend HA charge l'icône via quatre URL selon le contexte
-    (icon.png, logo.png et variantes @2x). On enregistre une vue pour
-    chacune afin que l'icône apparaisse partout (carte intégration,
-    page de détail, panneau appareil).
-    """
-    component_dir = Path(__file__).parent
-    icon_file = component_dir / "icon.png"
-
-    # Icône de marque — lecture unique dans un executor (pas de blocking I/O
-    # dans la boucle asyncio), puis service depuis la mémoire pour toutes les
-    # URL de marque connues (icon.png, logo.png, variantes @2x).
-    if icon_file.exists():
-        try:
-            icon_data: bytes = await hass.async_add_executor_job(icon_file.read_bytes)
-            for asset in _BRAND_ASSETS:
-                view = _make_brand_view(asset, icon_data)
-                hass.http.register_view(view)
-                _LOGGER.debug(
-                    "Vue brand enregistrée : /api/brands/integration/%s/%s (%d bytes)",
-                    DOMAIN, asset, len(icon_data),
-                )
-        except Exception as err:  # pragma: no cover
-            _LOGGER.warning("Impossible d'enregistrer les vues brand : %s", err)
-    else:
-        _LOGGER.warning(
-            "icon.png introuvable dans %s — les icônes d'intégration ne s'afficheront pas",
-            component_dir,
-        )
-
-    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
