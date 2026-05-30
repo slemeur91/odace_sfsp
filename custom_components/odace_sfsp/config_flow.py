@@ -38,29 +38,58 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def _get_adapter_address(adapter_name: str, details: Any) -> str:
+    """Extrait la MAC depuis un objet AdapterDetails (dataclass ou dict).
+
+    Si HA retourne une adresse vide ou nulle (cas fréquent sur Proxmox/VM
+    avant que BlueZ ait complètement initialisé l'adaptateur), on tente une
+    lecture directe depuis le sysfs Linux via ``read_controller_mac``.
+    """
+    # Extraction depuis HA
+    if hasattr(details, "address"):
+        address = details.address or ""
+    elif isinstance(details, dict):
+        address = details.get("address") or ""
+    else:
+        address = ""
+
+    # Fallback sysfs/hciconfig pour les dongles HCI natifs
+    if (not address or address == "00:00:00:00:00:00") and adapter_name.startswith("hci"):
+        address = read_controller_mac(adapter_name) or ""
+
+    return address.upper() if address else "00:00:00:00:00:00"
+
+
 def _list_hci_adapters(hass) -> Dict[str, str]:
     """Retourne ``{adapter_name: 'name (MAC)'}`` pour tous les contrôleurs BLE connus.
 
     Couvre :
-    - les dongles HCI natifs  (clé = "hci0", "hci1", …)
-    - les proxies ESP32/ESPHome (clé = adresse MAC de l'ESP32, ex. "AA:BB:CC:DD:EE:FF")
+    - les dongles HCI natifs  (clé = "hci0", "hci1", …) — MAC lue depuis HA
+      ou en fallback depuis sysfs / hciconfig
+    - les proxies ESP32/ESPHome (clé = adresse MAC de l'ESP32)
 
     La clé du dict renvoyé par ``async_get_adapters`` EST le nom de l'adaptateur ;
-    on itère donc sur ``.items()`` et non ``.values()``.
+    on itère sur ``.items()`` pour conserver ce nom.
     """
     adapters: Dict[str, str] = {}
     try:
         for adapter_name, details in bluetooth.async_get_adapters(hass).items():
-            # AdapterDetails est un dataclass — accès direct à l'attribut ``address``
-            if hasattr(details, "address"):
-                address = details.address
-            elif isinstance(details, dict):
-                address = details.get("address", "00:00:00:00:00:00")
-            else:
-                address = "00:00:00:00:00:00"
+            address = _get_adapter_address(adapter_name, details)
             adapters[adapter_name] = f"{adapter_name} ({address})"
     except Exception as err:  # pragma: no cover
         _LOGGER.debug("Unable to list adapters via HA: %s", err)
+
+    # Dernier recours : énumération sysfs si HA n'a rien renvoyé
+    if not adapters:
+        try:
+            import os
+            for name in sorted(os.listdir("/sys/class/bluetooth/")):
+                if name.startswith("hci"):
+                    address = read_controller_mac(name) or "00:00:00:00:00:00"
+                    adapters[name] = f"{name} ({address})"
+        except Exception:
+            pass
+
     if not adapters:
         adapters = {DEFAULT_HCI: f"{DEFAULT_HCI} (00:00:00:00:00:00)"}
     return adapters
@@ -79,16 +108,19 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             hci_name = user_input[CONF_HCI]
-            mac = read_controller_mac(hci_name)
+
+            # Résolution de la MAC : HA d'abord, puis sysfs/hciconfig via read_controller_mac
+            mac: str | None = None
+            try:
+                ha_adapters = bluetooth.async_get_adapters(self.hass)
+                if hci_name in ha_adapters:
+                    mac = _get_adapter_address(hci_name, ha_adapters[hci_name])
+                    if mac == "00:00:00:00:00:00":
+                        mac = None
+            except Exception:
+                pass
             if not mac:
-                # Essaye de la récupérer depuis la description renvoyée par HA
-                try:
-                    for details in bluetooth.async_get_adapters(self.hass).values():
-                        if (details.get("hci") or "") == hci_name:
-                            mac = details.get("address")
-                            break
-                except Exception:  # pragma: no cover
-                    pass
+                mac = read_controller_mac(hci_name)
 
             mac = mac or "00:00:00:00:00:00"
 

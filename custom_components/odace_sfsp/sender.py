@@ -187,15 +187,36 @@ def hci_index_from_name(name: str) -> int:
 
 
 def read_controller_mac(hci_name: str) -> str | None:
-    """Lit la MAC d'un contrôleur via ``hciconfig`` (lecture synchrone)."""
+    """Lit la MAC d'un contrôleur Bluetooth (lecture synchrone).
+
+    Ordre de tentatives :
+    1. sysfs  ``/sys/class/bluetooth/<hci>/address``  (sans outil externe,
+       fonctionne sur HAOS, Supervised, Proxmox LXC, VM)
+    2. ``hciconfig <hci>``  (outil BlueZ, parfois absent dans les containers)
+    """
+    # 1. sysfs — disponible sans dépendance externe
+    try:
+        sysfs = f"/sys/class/bluetooth/{hci_name}/address"
+        with open(sysfs) as fh:
+            mac = fh.read().strip().upper()
+        if mac and mac != "00:00:00:00:00:00":
+            _LOGGER.debug("read_controller_mac %s via sysfs : %s", hci_name, mac)
+            return mac
+    except Exception:
+        pass
+
+    # 2. hciconfig — fallback si sysfs indisponible
     try:
         import subprocess
 
-        out = subprocess.check_output(["hciconfig", hci_name], stderr=subprocess.STDOUT).decode()
+        out = subprocess.check_output(
+            ["hciconfig", hci_name], stderr=subprocess.STDOUT
+        ).decode()
         for line in out.splitlines():
             line = line.strip()
             if "BD Address:" in line:
                 return line.split("BD Address:")[1].split()[0].strip()
-    except Exception as err:  # pragma: no cover
-        _LOGGER.debug("read_controller_mac failed: %s", err)
+    except Exception as err:
+        _LOGGER.debug("read_controller_mac hciconfig failed: %s", err)
+
     return None
