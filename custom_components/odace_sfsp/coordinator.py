@@ -134,13 +134,19 @@ class OdaceSFSPCoordinator:
     @callback
     def _schedule_new_device(self, parsed: Dict[str, Any]) -> None:
         uuid = parsed["uuid"].lower()
+        model = parsed.get("model", "dcl")
         self.devices[uuid] = {
             "uuid": uuid,
             "mac": parsed.get("mac", ""),
-            "model": parsed.get("model", "dcl"),
-            "name": f"Odace SFSP {parsed.get('model','dcl')} {uuid}",
+            "model": model,
+            "name": f"Odace SFSP {model} {uuid}",
         }
         async_dispatcher_send(self.hass, SIGNAL_DEVICES_CHANGED)
+        # Pour les périphériques commandables (DCL, volet, prise, dimmer, generic),
+        # envoyer automatiquement la trame de pairing pour les associer au contrôleur.
+        # Les switches n'ont pas de pairing (réception seule).
+        if model in ("dcl", "shutter", "plug", "dimmer", "generic"):
+            self.hass.async_create_task(self.async_send_pair(uuid))
         self.hass.async_create_task(self._async_persist())
 
     async def async_add_device(self, device: Dict[str, Any]) -> None:
@@ -192,6 +198,30 @@ class OdaceSFSPCoordinator:
         self._last_command[uuid] = {"ac": ac, "ts": time.time()}
         await async_send(self.hci_index, payload)
         _LOGGER.info("Odace SFSP TX uuid=%s ac=%s options=%s", uuid, ac, options)
+
+    async def async_send_pair(self, uuid: str) -> None:
+        """Envoie la trame de pairing (``type=pair``) pour associer un périphérique.
+
+        Cette trame informe le périphérique de l'identité du contrôleur (UUID_CONTROLLER
+        + jeedom_key chiffrés avec UNIQUE_KEY). Sans elle, le périphérique n'accepte
+        pas les commandes on/off/goto/… ultérieures.
+
+        Applicable uniquement aux modèles commandables : dcl, shutter, plug, dimmer,
+        generic. Les switches (réception seule) n'ont pas de mécanisme de pairing.
+        """
+        uuid = uuid.lower()
+        device = self.devices.get(uuid)
+        if device is None:
+            _LOGGER.error("async_send_pair: device %s inconnu", uuid)
+            return
+        payload = craft_payload(
+            {"uuid": device["uuid"].upper(), "model": device["model"]},
+            "pair",
+            self.jeedom_key,
+            self.dongle_mac,
+        )
+        await async_send(self.hci_index, payload)
+        _LOGGER.info("Odace SFSP PAIR envoyé → uuid=%s", uuid)
 
     def was_commanded_recently(self, uuid: str, ac: str, window: float = 2.0) -> bool:
         """Anti-boucle : True si on vient d'envoyer cette commande pour ce uuid."""

@@ -39,14 +39,26 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _list_hci_adapters(hass) -> Dict[str, str]:
-    """Retourne ``{hci_name: 'hciX (MAC)'}`` pour tous les contrôleurs connus."""
+    """Retourne ``{adapter_name: 'name (MAC)'}`` pour tous les contrôleurs BLE connus.
+
+    Couvre :
+    - les dongles HCI natifs  (clé = "hci0", "hci1", …)
+    - les proxies ESP32/ESPHome (clé = adresse MAC de l'ESP32, ex. "AA:BB:CC:DD:EE:FF")
+
+    La clé du dict renvoyé par ``async_get_adapters`` EST le nom de l'adaptateur ;
+    on itère donc sur ``.items()`` et non ``.values()``.
+    """
     adapters: Dict[str, str] = {}
-    # HA >= 2024 : utiliser async_get_adapters
     try:
-        for details in bluetooth.async_get_adapters(hass).values():
-            name = details.get("hci") or details.get("adapter") or "hci0"
-            address = details.get("address", "00:00:00:00:00:00")
-            adapters[name] = f"{name} ({address})"
+        for adapter_name, details in bluetooth.async_get_adapters(hass).items():
+            # AdapterDetails est un dataclass — accès direct à l'attribut ``address``
+            if hasattr(details, "address"):
+                address = details.address
+            elif isinstance(details, dict):
+                address = details.get("address", "00:00:00:00:00:00")
+            else:
+                address = "00:00:00:00:00:00"
+            adapters[adapter_name] = f"{adapter_name} ({address})"
     except Exception as err:  # pragma: no cover
         _LOGGER.debug("Unable to list adapters via HA: %s", err)
     if not adapters:

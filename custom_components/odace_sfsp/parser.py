@@ -89,6 +89,10 @@ def parse_trame(trame: str, mac: str) -> Optional[Dict[str, Any]]:
             string = _parse_shutter(trame, cf, uuid, string, result)
         elif dtype == "9244":
             string = _parse_generic(trame, cf, uuid, string, result)
+        elif dtype == "9044":
+            string = _parse_plug(trame, cf, uuid, string, result)
+        elif dtype == "9144":
+            string = _parse_dimmer(trame, cf, uuid, string, result)
         else:
             _LOGGER.debug("Unknown type %s", dtype)
             return None
@@ -229,6 +233,82 @@ def _parse_shutter(trame: str, cf: str, uuid: str, string: str, result: dict) ->
             data["label"] = {"05": "Ouverture", "06": "Fermeture", "07": "Arrêté"}[code]
     elif cf == "31":
         data["type"] = "binding"
+    return string
+
+
+def _parse_plug(trame: str, cf: str, uuid: str, string: str, result: dict) -> str:
+    """Prise Odace SFSP (type 9044) — même structure que DCL (on/off + groupes).
+
+    cf 40 = advertisement, cf 41 = binding.
+    """
+    result["model"] = "plug"
+    string += f"This is a Plug with UUID {uuid}"
+    data = result["data"]
+    if cf == "40":
+        data["type"] = "advertisement"
+        string += " advertisement"
+        data["firmware"] = trame[58:62]
+        state_code = trame[32:34]
+        if state_code == "01":
+            data["value"], data["label"] = "1", "Allumé"
+            string += " state is ON"
+        elif state_code == "00":
+            data["value"], data["label"] = "0", "Eteint"
+            string += " state is OFF"
+        elif state_code == "10":
+            data["paired"] = "denied"
+            string += " pairing denied"
+        elif state_code == "11":
+            data["paired"] = "ok"
+            string += " pairing ok"
+        elif state_code == "12":
+            data["paired"] = "paired"
+            string += " paired"
+        elif state_code == "13":
+            data["paired"] = "unpaired"
+            string += " unpaired"
+        string = _parse_groups(trame, string, data, offset=36)
+    elif cf == "41":
+        data["type"] = "binding"
+        string += " binding"
+    return string
+
+
+def _parse_dimmer(trame: str, cf: str, uuid: str, string: str, result: dict) -> str:
+    """Variateur Odace SFSP (type 9144) — même structure que DCL.
+
+    cf 50 = advertisement, cf 51 = binding.
+    """
+    result["model"] = "dimmer"
+    string += f"This is a Dimmer with UUID {uuid}"
+    data = result["data"]
+    if cf == "50":
+        data["type"] = "advertisement"
+        string += " advertisement"
+        data["firmware"] = trame[58:62]
+        state_code = trame[32:34]
+        if state_code == "01":
+            data["value"], data["label"] = "1", "Allumé"
+            string += " state is ON"
+        elif state_code == "00":
+            data["value"], data["label"] = "0", "Eteint"
+            string += " state is OFF"
+        elif state_code == "10":
+            data["paired"] = "denied"
+            string += " pairing denied"
+        elif state_code == "11":
+            data["paired"] = "ok"
+            string += " pairing ok"
+        elif state_code == "12":
+            data["paired"] = "paired"
+            string += " paired"
+        elif state_code == "13":
+            data["paired"] = "unpaired"
+            string += " unpaired"
+        string = _parse_groups(trame, string, data, offset=36)
+    elif cf == "51":
+        data["type"] = "binding"
+        string += " binding"
     return string
 
 

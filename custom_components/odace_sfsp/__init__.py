@@ -17,7 +17,7 @@ from .coordinator import OdaceSFSPCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.LIGHT, Platform.EVENT]
+PLATFORMS: list[Platform] = [Platform.LIGHT, Platform.EVENT, Platform.COVER, Platform.SWITCH]
 
 # Le frontend HA charge l'icône de marque via plusieurs URL selon le contexte :
 #   icon.png      → carte intégration (panneau Appareils & Services)
@@ -126,10 +126,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _svc_remove_device(call: ServiceCall) -> None:
         await coordinator.async_remove_device(call.data["uuid"])
 
+    async def _svc_bind_device(call: ServiceCall) -> None:
+        """Envoie la trame de pairing pour un périphérique déjà connu."""
+        await coordinator.async_send_pair(call.data["uuid"])
+
     hass.services.async_register(DOMAIN, "send_command", _svc_send_command)
     hass.services.async_register(DOMAIN, "start_learn", _svc_learn)
     hass.services.async_register(DOMAIN, "add_device", _svc_add_device)
     hass.services.async_register(DOMAIN, "remove_device", _svc_remove_device)
+    hass.services.async_register(DOMAIN, "bind_device", _svc_bind_device)
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True

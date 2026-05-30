@@ -42,3 +42,16 @@ remove_device:
   name: Supprimer un périphérique
   fields:
     uuid: { required: true, selector: { text: {} } }
+
+bind_device:
+  name: Associer un périphérique (pairing)
+  description: >
+    Envoie la trame BLE de pairing pour associer un périphérique commandable
+    (DCL, volet, prise, dimmer, generic) au contrôleur. À utiliser après
+    avoir ajouté manuellement un périphérique, ou si l'association a été perdue.
+    Non applicable aux switches (réception seule).
+  fields:
+    uuid:
+      required: true
+      example: "472500"
+      selector: { text: {} }

@@ -1,0 +1,20 @@
+{
+  "entity": {
+    "light": {
+      "default": "mdi:ceiling-light-outline",
+      "state": {
+        "on": "mdi:ceiling-light",
+        "off": "mdi:ceiling-light-outline"
+      }
+    },
+    "event": {
+      "default": "mdi:light-switch"
+    },
+    "cover": {
+      "default": "mdi:roller-blind"
+    },
+    "switch": {
+      "default": "mdi:power-socket-fr"
+    }
+  }
+}
