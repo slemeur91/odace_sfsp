@@ -1,7 +1,6 @@
 """Coordinator : écoute BLE passive + envoi, stockage des devices."""
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from typing import Any, Dict, Optional
@@ -35,6 +34,11 @@ _LOGGER = logging.getLogger(__name__)
 
 STORAGE_VERSION = 1
 
+# Durée pendant laquelle une trame binding est mémorisée en attente (secondes).
+# Si start_learn est appelé dans cette fenêtre, le périphérique est enregistré
+# sans que l'utilisateur ait à appuyer à nouveau sur le bouton de binding.
+_PENDING_BINDING_TTL = 60.0
+
 
 class OdaceSFSPCoordinator:
     """Gère le cycle de vie BLE + la persistance des devices."""
@@ -53,6 +57,12 @@ class OdaceSFSPCoordinator:
         self._store = Store(hass, STORAGE_VERSION, f"{DOMAIN}_{entry.entry_id}")
         # Dernier ordre envoyé pour éviter les boucles d'advertising sur dcl
         self._last_command: Dict[str, Dict[str, Any]] = {}
+        # Trames binding reçues d'inconnus alors que learn mode était off.
+        # Mémorisées pendant _PENDING_BINDING_TTL secondes pour que start_learn
+        # puisse les traiter a posteriori (l'utilisateur a déclenché le binding
+        # avant d'activer le mode apprentissage).
+        self._pending_bindings: Dict[str, Dict[str, Any]] = {}
+        # {uuid: {"result": ..., "expires": float}}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -100,20 +110,38 @@ class OdaceSFSPCoordinator:
             uuid, result.get("model"), result["data"],
         )
 
-        # Gestion de l'apprentissage (binding)
+        # ---- Trames de binding ----
         if result["data"].get("type") == "binding":
             if uuid not in self.devices:
                 if self.learn_mode and time.time() < self._learn_expires:
-                    _LOGGER.info("Learn mode: new binding received for %s", uuid)
+                    # Mode apprentissage actif : enregistrer immédiatement
+                    _LOGGER.info("Learn mode: new binding received for %s (model=%s)", uuid, result.get("model"))
                     self.learn_mode = False
+                    self._pending_bindings.pop(uuid, None)
                     self._schedule_new_device(result)
                 else:
-                    _LOGGER.debug("Binding for unknown device %s (learn mode off)", uuid)
-                return
-            # Déjà connu : on ignore les binding repeat
+                    # Mémoriser le binding pour que start_learn puisse le traiter
+                    # si l'utilisateur active le mode apprentissage sous peu
+                    expires = time.time() + _PENDING_BINDING_TTL
+                    self._pending_bindings[uuid] = {"result": result, "expires": expires}
+                    _LOGGER.debug(
+                        "Binding from unknown device %s (learn mode off) — "
+                        "mémorisé %.0fs (appeler start_learn pour l'enregistrer)",
+                        uuid, _PENDING_BINDING_TTL,
+                    )
+            else:
+                # Périphérique déjà connu qui renvoie une trame binding
+                # (ex : reset d'usine, perte d'appairage) → re-pairing automatique
+                model = self.devices[uuid].get("model", "")
+                if model in ("dcl", "shutter", "plug", "dimmer", "generic"):
+                    _LOGGER.info(
+                        "Re-binding: périphérique connu %s a redemandé l'appairage → envoi trame pair",
+                        uuid,
+                    )
+                    self.hass.async_create_task(self.async_send_pair(uuid))
             return
 
-        # Équipement inconnu et pas en mode apprentissage -> on ignore
+        # ---- Trames d'advertisement ----
         if uuid not in self.devices:
             _LOGGER.debug("Frame from unknown device %s - ignored", uuid)
             return
@@ -234,9 +262,38 @@ class OdaceSFSPCoordinator:
     # Learn mode
     # ------------------------------------------------------------------
     def start_learn(self, timeout: float = 60.0) -> None:
+        """Active le mode apprentissage et traite les bindings en attente.
+
+        Si des trames binding ont été reçues récemment (dans la fenêtre
+        _PENDING_BINDING_TTL) alors que le mode apprentissage était off,
+        elles sont traitées immédiatement sans que l'utilisateur ait à
+        appuyer à nouveau sur le bouton du périphérique.
+        """
         self.learn_mode = True
         self._learn_expires = time.time() + timeout
-        _LOGGER.info("Learn mode enabled for %ds", timeout)
+
+        # Traiter les bindings en attente non expirés
+        now = time.time()
+        pending = {
+            uuid: entry
+            for uuid, entry in self._pending_bindings.items()
+            if now < entry["expires"] and uuid not in self.devices
+        }
+        if pending:
+            # Prendre le plus récent (dernier reçu)
+            uuid, entry = max(pending.items(), key=lambda kv: kv[1]["expires"])
+            _LOGGER.info(
+                "Learn mode: traitement du binding en attente pour %s (reçu il y a %.0fs)",
+                uuid, now - (entry["expires"] - _PENDING_BINDING_TTL),
+            )
+            self.learn_mode = False
+            self._pending_bindings.pop(uuid, None)
+            self._schedule_new_device(entry["result"])
+        else:
+            _LOGGER.info(
+                "Learn mode activé pour %ds — appuyer sur le bouton de binding du périphérique",
+                timeout,
+            )
 
     def stop_learn(self) -> None:
         self.learn_mode = False
