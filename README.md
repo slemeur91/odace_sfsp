@@ -67,3 +67,8 @@ $ python3 tests/validate_parser.py
 ```
 
 Les 8 cas couvrent les DCL état `OFF` / `ON` et les interrupteurs `Toggle` avec leurs groupes `ffffffff`.
+
+---
+
+[releases-shield]: https://img.shields.io/github/release/slemeur91/odace_sfsp.svg?style=flat-square
+[releases]: https://github.com/slemeur91/odace_sfsp/releases

@@ -1,0 +1,111 @@
+################################################################################
+# Odace SFSP — Firmware ESPHome pour ESP32
+#
+# Rôles :
+#   1. Réception BLE  → Bluetooth Proxy → HA reçoit les advertisements Schneider
+#   2. Envoi BLE      → souscription MQTT → diffusion du payload comme BLE advertising
+#   3. Publication MAC → publie la MAC Bluetooth sur odace_sfsp/mac au démarrage
+#                        (permet la découverte automatique depuis le config flow HA)
+#
+# Prérequis :
+#   - ESP32 ou ESP32-S3 (PAS ESP32-C3 : pas d'API BLE advertising raw)
+#   - ESPHome >= 2023.6
+#   - Broker MQTT accessible depuis l'ESP32 et depuis HA
+#   - Fichier ble_advertiser.h dans le même dossier
+#
+# Secrets à définir dans secrets.yaml ESPHome :
+#   wifi_ssid, wifi_password, esphome_api_key, ota_password
+#   mqtt_broker, mqtt_username, mqtt_password
+################################################################################
+
+esphome:
+  name: odace-sfsp-proxy
+  friendly_name: "Odace SFSP Proxy ESP32"
+  includes:
+    - ble_advertiser.h
+
+  # Publication de la MAC Bluetooth au démarrage
+  # Le config flow HA attend cette valeur sur odace_sfsp/mac
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          // Récupérer la MAC Bluetooth de l'ESP32
+          uint8_t mac[6];
+          esp_read_mac(mac, ESP_MAC_BT);
+          char mac_str[18];
+          snprintf(mac_str, sizeof(mac_str),
+            "%02X:%02X:%02X:%02X:%02X:%02X",
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+          ESP_LOGI("odace", "Bluetooth MAC: %s", mac_str);
+          // Publier sur MQTT — le config flow HA souscrit à ce topic
+          // pour pré-remplir la MAC automatiquement
+          id(mqtt_client).publish("odace_sfsp/mac", mac_str);
+
+esp32:
+  board: esp32dev   # Adapter : az-delivery-devkit-v4, esp32-s3-devkitc-1, etc.
+  framework:
+    type: arduino    # Requis pour ble_advertiser.h (API Arduino + ESP-IDF)
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Odace-SFSP-Fallback"
+    password: "odacesfsp"
+
+captive_portal:
+
+logger:
+  level: INFO
+
+api:
+  encryption:
+    key: !secret esphome_api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# MQTT — même broker que celui configuré dans HA
+mqtt:
+  id: mqtt_client
+  broker: !secret mqtt_broker    # ex: 192.168.1.10
+  port: 1883
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  # Publication automatique de la MAC à la connexion MQTT
+  on_connect:
+    - lambda: |-
+        uint8_t mac[6];
+        esp_read_mac(mac, ESP_MAC_BT);
+        char mac_str[18];
+        snprintf(mac_str, sizeof(mac_str),
+          "%02X:%02X:%02X:%02X:%02X:%02X",
+          mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        id(mqtt_client).publish("odace_sfsp/mac", mac_str, 0, true);
+        ESP_LOGI("odace", "MAC publiée sur odace_sfsp/mac : %s", mac_str);
+
+  # Réception du payload hex depuis HA → diffusion BLE advertising
+  on_message:
+    - topic: odace_sfsp/send
+      then:
+        - lambda: |-
+            std::string payload = x.c_str();
+            ESP_LOGI("odace", "BLE payload reçu: %s", payload.c_str());
+            ble_advertiser_send(payload);
+
+# Bluetooth Proxy — réception passive vers HA
+bluetooth_proxy:
+  active: false   # Scan passif suffisant pour les Odace SFSP
+
+# Diagnostic (optionnel)
+sensor:
+  - platform: wifi_signal
+    name: "Odace Proxy WiFi Signal"
+    update_interval: 60s
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "Odace Proxy IP"
