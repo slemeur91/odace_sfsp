@@ -52,15 +52,21 @@
       },
       "add": {
         "title": "Add a device",
-        "data": { "uuid": "UUID", "name": "Name", "model": "Model", "mac": "MAC address (optional)" }
+        "description": "The UUID is visible in the parser logs (e.g. `9c0300`). Enter in the exact order shown in the logs — do not reverse the bytes.",
+        "data": { "uuid": "UUID (6 hex characters, e.g. 9c0300)", "name": "Name", "model": "Model", "mac": "MAC address (optional)" }
       },
       "select_edit": { "title": "Choose a device to edit", "data": { "uuid": "Device" } },
-      "edit": { "title": "Edit", "data": { "name": "Name", "model": "Model", "mac": "MAC address" } },
+      "edit": {
+        "title": "Edit",
+        "description": "The UUID must exactly match the one in the BLE logs (e.g. `9c0300`). If commands have no effect, check that the UUID is not byte-reversed.",
+        "data": { "uuid": "UUID (6 hex characters)", "name": "Name", "model": "Model", "mac": "MAC address" }
+      },
       "select_remove": { "title": "Choose a device to remove", "data": { "uuid": "Device" } }
     },
     "error": {
       "already_exists": "A device with this UUID already exists",
-      "invalid_mac": "Invalid MAC address — expected format: AA:BB:CC:DD:EE:FF"
+      "invalid_mac": "Invalid MAC address — expected format: AA:BB:CC:DD:EE:FF",
+      "invalid_uuid": "Invalid UUID — 6 hex characters required (e.g. 9c0300). Check that the bytes are not reversed."
     }
   },
   "services": {

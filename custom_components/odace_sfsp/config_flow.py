@@ -57,11 +57,17 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-_MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+_MAC_RE  = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+_UUID_RE = re.compile(r"^[0-9A-Fa-f]{6}$")
 
 
 def _is_valid_mac(mac: str) -> bool:
     return bool(_MAC_RE.match(mac.strip()))
+
+
+def _is_valid_uuid(uuid: str) -> bool:
+    """Valide que l'UUID est bien 6 caractères hexadécimaux (3 octets)."""
+    return bool(_UUID_RE.match(uuid.strip()))
 
 
 # ---------------------------------------------------------------------------
@@ -449,8 +455,10 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
         errors: Dict[str, str] = {}
         if user_input is not None:
             coord = self.hass.data[DOMAIN][self.entry.entry_id]
-            uuid = user_input[CONF_UUID].lower()
-            if uuid in coord.devices:
+            uuid = user_input[CONF_UUID].strip().lower()
+            if not _is_valid_uuid(uuid):
+                errors[CONF_UUID] = "invalid_uuid"
+            elif uuid in coord.devices:
                 errors["base"] = "already_exists"
             else:
                 await coord.async_add_device(
@@ -493,13 +501,29 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
     async def async_step_edit(self, user_input=None) -> FlowResult:
         coord = self.hass.data[DOMAIN][self.entry.entry_id]
         current = coord.devices[self._editing]
+        errors: Dict[str, str] = {}
         if user_input is not None:
-            await coord.async_update_device(self._editing, user_input)
-            return self.async_create_entry(title="", data={})
+            new_uuid = user_input.get(CONF_UUID, self._editing).strip().lower()
+            if not _is_valid_uuid(new_uuid):
+                errors[CONF_UUID] = "invalid_uuid"
+            else:
+                updates = {
+                    CONF_NAME: user_input[CONF_NAME],
+                    CONF_MODEL: user_input[CONF_MODEL],
+                    CONF_MAC: user_input.get(CONF_MAC, ""),
+                }
+                if new_uuid != self._editing:
+                    # UUID corrigé : supprimer l'ancien, ajouter le nouveau
+                    await coord.async_remove_device(self._editing)
+                    await coord.async_add_device({CONF_UUID: new_uuid, **updates})
+                else:
+                    await coord.async_update_device(self._editing, updates)
+                return self.async_create_entry(title="", data={})
         return self.async_show_form(
             step_id="edit",
             data_schema=vol.Schema(
                 {
+                    vol.Required(CONF_UUID, default=self._editing): str,
                     vol.Required(CONF_NAME, default=current.get("name", "")): str,
                     vol.Required(
                         CONF_MODEL, default=current.get("model", "dcl")
@@ -507,6 +531,7 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                     vol.Optional(CONF_MAC, default=current.get("mac", "")): str,
                 }
             ),
+            errors=errors,
         )
 
     # ---- Suppression ----

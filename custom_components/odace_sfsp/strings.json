@@ -52,15 +52,21 @@
       },
       "add": {
         "title": "Ajouter un périphérique",
-        "data": { "uuid": "UUID", "name": "Nom", "model": "Modèle", "mac": "Adresse MAC (optionnel)" }
+        "description": "L'UUID est visible dans les logs du parser (ex : `9c0300`). Saisir dans l'ordre exact des logs, sans inverser les octets.",
+        "data": { "uuid": "UUID (6 caractères hex, ex : 9c0300)", "name": "Nom", "model": "Modèle", "mac": "Adresse MAC (optionnel)" }
       },
       "select_edit": { "title": "Choisir un périphérique à modifier", "data": { "uuid": "Périphérique" } },
-      "edit": { "title": "Modifier", "data": { "name": "Nom", "model": "Modèle", "mac": "Adresse MAC" } },
+      "edit": {
+        "title": "Modifier",
+        "description": "L'UUID doit correspondre exactement à celui des logs BLE (ex : `9c0300`). Si les commandes n'ont pas d'effet, vérifier que l'UUID n'est pas inversé.",
+        "data": { "uuid": "UUID (6 caractères hex)", "name": "Nom", "model": "Modèle", "mac": "Adresse MAC" }
+      },
       "select_remove": { "title": "Choisir un périphérique à supprimer", "data": { "uuid": "Périphérique" } }
     },
     "error": {
       "already_exists": "Un périphérique avec cet UUID existe déjà",
-      "invalid_mac": "Adresse MAC invalide — format attendu : AA:BB:CC:DD:EE:FF"
+      "invalid_mac": "Adresse MAC invalide — format attendu : AA:BB:CC:DD:EE:FF",
+      "invalid_uuid": "UUID invalide — 6 caractères hexadécimaux requis (ex : 9c0300). Vérifier que les octets ne sont pas inversés."
     }
   },
   "services": {
