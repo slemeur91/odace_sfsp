@@ -9,7 +9,7 @@ DOMAIN = "odace_sfsp"
 # Identifiant fabricant BLE Schneider Electric
 MANUFACTURER_ID = 0x02B6  # 0xB602 en little-endian dans la trame
 
-# Catégories de configuration
+# Catégories de configuration communes
 CONF_HCI = "hci"
 CONF_MAC = "mac"
 CONF_JEEDOM_KEY = "jeedom_key"
@@ -19,6 +19,19 @@ CONF_MODEL = "model"
 CONF_NAME = "name"
 
 DEFAULT_HCI = "hci0"
+
+# Mode d'envoi des trames BLE
+CONF_SEND_MODE = "send_mode"
+SEND_MODE_HCI  = "hci"   # Dongle USB local (HAOS, Proxmox, etc.) — hcitool
+SEND_MODE_MQTT = "mqtt"  # ESP32 via MQTT
+
+# Configuration MQTT (mode ESP32)
+CONF_MQTT_TOPIC = "mqtt_topic"
+DEFAULT_MQTT_TOPIC = "odace_sfsp/send"
+# Topic sur lequel l'ESP32 publie sa MAC Bluetooth au démarrage (découverte auto)
+DEFAULT_MQTT_MAC_TOPIC = "odace_sfsp/mac"
+# Durée max d'attente pour la découverte automatique de la MAC ESP32 (secondes)
+MAC_DISCOVERY_TIMEOUT = 8
 
 # Modèles supportés
 MODEL_DCL = "dcl"
@@ -39,7 +52,7 @@ SUPPORTED_MODELS = [
     MODEL_SCENE,
 ]
 
-# Entête de trame (constants protocol Beagle)
+# Entête de trame (protocole Beagle)
 UNIQUE_HEADER = "0201041BFFB602"
 HEADER_VV = "01"
 HEADER_FS = "01"
@@ -96,7 +109,7 @@ SCENES = {
     "custom": "FC",
 }
 
-# Signals
+# Signals dispatcher
 SIGNAL_DEVICE_UPDATE = "odace_sfsp_device_update_{uuid}"
 SIGNAL_DEVICES_CHANGED = "odace_sfsp_devices_changed"
 

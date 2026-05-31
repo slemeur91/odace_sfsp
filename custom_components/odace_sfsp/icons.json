@@ -14,7 +14,11 @@
       "default": "mdi:roller-blind"
     },
     "switch": {
-      "default": "mdi:power-socket-fr"
+      "default": "mdi:toggle-switch-variant-off",
+      "state": {
+        "on": "mdi:toggle-switch-variant",
+        "off": "mdi:toggle-switch-variant-off"
+      }
     }
   }
 }

@@ -1,4 +1,13 @@
-"""Coordinator : écoute BLE passive + envoi, stockage des devices."""
+"""Coordinator : écoute BLE passive + envoi HCI (dongle USB) ou MQTT (ESP32).
+
+La réception BLE (HA Bluetooth API) est identique dans les deux modes.
+Seul l'envoi diffère :
+  - SEND_MODE_HCI  → craft_payload + hcitool   (dongle USB local)
+  - SEND_MODE_MQTT → craft_payload + MQTT pub  (ESP32 via ESPHome)
+
+Le mode est déterminé par la clé CONF_SEND_MODE dans la config entry.
+Les installations existantes sans CONF_SEND_MODE utilisent le mode HCI par défaut.
+"""
 from __future__ import annotations
 
 import logging
@@ -18,14 +27,24 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 
 from .parser import parse_manufacturer_data
-from .sender import async_send, craft_payload, hci_index_from_name
+from .sender import (
+    async_send as hci_send,
+    async_send_mqtt,
+    craft_payload,
+    hci_index_from_name,
+)
 from .const import (
     CONF_DEVICES,
     CONF_HCI,
     CONF_JEEDOM_KEY,
     CONF_MAC,
+    CONF_MQTT_TOPIC,
+    CONF_SEND_MODE,
+    DEFAULT_MQTT_TOPIC,
     DOMAIN,
     MANUFACTURER_ID,
+    SEND_MODE_HCI,
+    SEND_MODE_MQTT,
     SIGNAL_DEVICES_CHANGED,
     SIGNAL_DEVICE_UPDATE,
 )
@@ -36,39 +55,48 @@ STORAGE_VERSION = 1
 
 # Durée pendant laquelle une trame binding est mémorisée en attente (secondes).
 # Si start_learn est appelé dans cette fenêtre, le périphérique est enregistré
-# sans que l'utilisateur ait à appuyer à nouveau sur le bouton de binding.
+# sans que l'utilisateur ait à appuyer à nouveau sur le bouton.
 _PENDING_BINDING_TTL = 60.0
 
 
 class OdaceSFSPCoordinator:
-    """Gère le cycle de vie BLE + la persistance des devices."""
+    """Gère le cycle de vie BLE + la persistance des devices.
+
+    Supporte deux modes d'envoi :
+    - HCI  : dongle USB local (HAOS, Proxmox, VM) via hcitool
+    - MQTT : ESP32 via ESPHome Bluetooth Proxy + publication MQTT
+    """
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.hass = hass
         self.entry = entry
-        self.hci_name: str = entry.data.get(CONF_HCI, "hci0")
-        self.hci_index: int = hci_index_from_name(self.hci_name)
+
+        self.send_mode: str = entry.data.get(CONF_SEND_MODE, SEND_MODE_HCI)
         self.dongle_mac: str = entry.data.get(CONF_MAC, "00:00:00:00:00:00")
         self.jeedom_key: str = entry.data.get(CONF_JEEDOM_KEY, "")
         self.devices: Dict[str, Dict[str, Any]] = dict(entry.data.get(CONF_DEVICES, {}))
+
+        # Mode HCI
+        self.hci_name: str = entry.data.get(CONF_HCI, "hci0")
+        self.hci_index: int = hci_index_from_name(self.hci_name)
+
+        # Mode ESP32/MQTT
+        self.mqtt_topic: str = entry.data.get(CONF_MQTT_TOPIC, DEFAULT_MQTT_TOPIC)
+
         self.learn_mode: bool = False
         self._learn_expires: float = 0
         self._unsub_bt = None
         self._store = Store(hass, STORAGE_VERSION, f"{DOMAIN}_{entry.entry_id}")
-        # Dernier ordre envoyé pour éviter les boucles d'advertising sur dcl
+        # Dernier ordre envoyé — protection anti-boucle advertising
         self._last_command: Dict[str, Dict[str, Any]] = {}
-        # Trames binding reçues d'inconnus alors que learn mode était off.
-        # Mémorisées pendant _PENDING_BINDING_TTL secondes pour que start_learn
-        # puisse les traiter a posteriori (l'utilisateur a déclenché le binding
-        # avant d'activer le mode apprentissage).
+        # Trames binding reçues hors mode apprentissage (mémorisées _PENDING_BINDING_TTL s)
         self._pending_bindings: Dict[str, Dict[str, Any]] = {}
-        # {uuid: {"result": ..., "expires": float}}
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
     async def async_start(self) -> None:
-        """Enregistre le callback BLE sur les trames Schneider (0x02B6)."""
+        """Enregistre le callback BLE."""
         matcher = BluetoothCallbackMatcher(manufacturer_id=MANUFACTURER_ID)
         self._unsub_bt = bluetooth.async_register_callback(
             self.hass,
@@ -76,10 +104,16 @@ class OdaceSFSPCoordinator:
             matcher,
             BluetoothScanningMode.PASSIVE,
         )
-        _LOGGER.info(
-            "Odace SFSP listening on %s (MAC %s) - %d devices loaded",
-            self.hci_name, self.dongle_mac, len(self.devices),
-        )
+        if self.send_mode == SEND_MODE_MQTT:
+            _LOGGER.info(
+                "Odace SFSP [ESP32/MQTT] — MAC ESP32 %s, topic %s — %d devices",
+                self.dongle_mac, self.mqtt_topic, len(self.devices),
+            )
+        else:
+            _LOGGER.info(
+                "Odace SFSP [HCI] — %s (MAC %s) — %d devices",
+                self.hci_name, self.dongle_mac, len(self.devices),
+            )
 
     async def async_stop(self) -> None:
         if self._unsub_bt is not None:
@@ -87,7 +121,7 @@ class OdaceSFSPCoordinator:
             self._unsub_bt = None
 
     # ------------------------------------------------------------------
-    # BLE callback
+    # BLE callback (identique dans les deux modes)
     # ------------------------------------------------------------------
     @callback
     def _on_ble_advertisement(
@@ -98,9 +132,7 @@ class OdaceSFSPCoordinator:
         mfg_bytes = service_info.manufacturer_data.get(MANUFACTURER_ID)
         if not mfg_bytes:
             return
-        mfg_hex = mfg_bytes.hex()
-        mac = service_info.address
-        result = parse_manufacturer_data(mfg_hex, mac)
+        result = parse_manufacturer_data(mfg_bytes.hex(), service_info.address)
         if not result:
             return
 
@@ -114,30 +146,28 @@ class OdaceSFSPCoordinator:
         if result["data"].get("type") == "binding":
             if uuid not in self.devices:
                 if self.learn_mode and time.time() < self._learn_expires:
-                    # Mode apprentissage actif : enregistrer immédiatement
-                    _LOGGER.info("Learn mode: new binding received for %s (model=%s)", uuid, result.get("model"))
+                    _LOGGER.info(
+                        "Learn mode: binding reçu pour %s (model=%s)",
+                        uuid, result.get("model"),
+                    )
                     self.learn_mode = False
                     self._pending_bindings.pop(uuid, None)
                     self._schedule_new_device(result)
                 else:
-                    # Mémoriser le binding pour que start_learn puisse le traiter
-                    # si l'utilisateur active le mode apprentissage sous peu
-                    expires = time.time() + _PENDING_BINDING_TTL
-                    self._pending_bindings[uuid] = {"result": result, "expires": expires}
+                    # Mémoriser pour que start_learn puisse traiter a posteriori
+                    self._pending_bindings[uuid] = {
+                        "result": result,
+                        "expires": time.time() + _PENDING_BINDING_TTL,
+                    }
                     _LOGGER.debug(
-                        "Binding from unknown device %s (learn mode off) — "
-                        "mémorisé %.0fs (appeler start_learn pour l'enregistrer)",
+                        "Binding de %s mémorisé %.0fs (learn mode off)",
                         uuid, _PENDING_BINDING_TTL,
                     )
             else:
-                # Périphérique déjà connu qui renvoie une trame binding
-                # (ex : reset d'usine, perte d'appairage) → re-pairing automatique
+                # Périphérique connu qui renvoie une trame binding (reset usine, perte d'appairage)
                 model = self.devices[uuid].get("model", "")
                 if model in ("dcl", "shutter", "plug", "dimmer", "generic"):
-                    _LOGGER.info(
-                        "Re-binding: périphérique connu %s a redemandé l'appairage → envoi trame pair",
-                        uuid,
-                    )
+                    _LOGGER.info("Re-binding connu %s → envoi pair", uuid)
                     self.hass.async_create_task(self.async_send_pair(uuid))
             return
 
@@ -146,15 +176,10 @@ class OdaceSFSPCoordinator:
             _LOGGER.debug("Frame from unknown device %s - ignored", uuid)
             return
 
-        # Mise à jour de la MAC si elle n'était pas connue
         if not self.devices[uuid].get("mac"):
-            self.devices[uuid]["mac"] = mac
+            self.devices[uuid]["mac"] = service_info.address
 
-        async_dispatcher_send(
-            self.hass,
-            SIGNAL_DEVICE_UPDATE.format(uuid=uuid),
-            result,
-        )
+        async_dispatcher_send(self.hass, SIGNAL_DEVICE_UPDATE.format(uuid=uuid), result)
 
     # ------------------------------------------------------------------
     # Device management
@@ -170,9 +195,6 @@ class OdaceSFSPCoordinator:
             "name": f"Odace SFSP {model} {uuid}",
         }
         async_dispatcher_send(self.hass, SIGNAL_DEVICES_CHANGED)
-        # Pour les périphériques commandables (DCL, volet, prise, dimmer, generic),
-        # envoyer automatiquement la trame de pairing pour les associer au contrôleur.
-        # Les switches n'ont pas de pairing (réception seule).
         if model in ("dcl", "shutter", "plug", "dimmer", "generic"):
             self.hass.async_create_task(self.async_send_pair(uuid))
         self.hass.async_create_task(self._async_persist())
@@ -190,8 +212,6 @@ class OdaceSFSPCoordinator:
         async_dispatcher_send(self.hass, SIGNAL_DEVICES_CHANGED)
 
     async def async_update_device(self, uuid: str, updates: Dict[str, Any]) -> None:
-        """Met à jour un device. Si le model change, ça implique côté plateformes
-        la suppression de l'entity précédente (ce que HA fait via le signal)."""
         uuid = uuid.lower()
         if uuid not in self.devices:
             return
@@ -204,9 +224,18 @@ class OdaceSFSPCoordinator:
         self.hass.config_entries.async_update_entry(self.entry, data=new_data)
 
     # ------------------------------------------------------------------
-    # Send
+    # Send — aiguillage HCI ou ESP32/MQTT
     # ------------------------------------------------------------------
-    async def async_send_command(self, uuid: str, ac: str, options: Optional[int] = None) -> None:
+    async def _dispatch_send(self, payload: str) -> None:
+        """Envoie le payload via le mode configuré."""
+        if self.send_mode == SEND_MODE_MQTT:
+            await async_send_mqtt(self.hass, self.mqtt_topic, payload)
+        else:
+            await hci_send(self.hci_index, payload)
+
+    async def async_send_command(
+        self, uuid: str, ac: str, options: Optional[int] = None
+    ) -> None:
         uuid = uuid.lower()
         device = self.devices.get(uuid)
         if device is None:
@@ -222,20 +251,18 @@ class OdaceSFSPCoordinator:
             self.dongle_mac,
             data,
         )
-        # Mémorise l'ordre pour la protection anti-boucle côté light
         self._last_command[uuid] = {"ac": ac, "ts": time.time()}
-        await async_send(self.hci_index, payload)
-        _LOGGER.info("Odace SFSP TX uuid=%s ac=%s options=%s", uuid, ac, options)
+        await self._dispatch_send(payload)
+        _LOGGER.info(
+            "Odace SFSP TX [%s] uuid=%s ac=%s options=%s",
+            self.send_mode, uuid, ac, options,
+        )
 
     async def async_send_pair(self, uuid: str) -> None:
-        """Envoie la trame de pairing (``type=pair``) pour associer un périphérique.
+        """Envoie la trame de pairing pour associer un périphérique commandable.
 
-        Cette trame informe le périphérique de l'identité du contrôleur (UUID_CONTROLLER
-        + jeedom_key chiffrés avec UNIQUE_KEY). Sans elle, le périphérique n'accepte
-        pas les commandes on/off/goto/… ultérieures.
-
-        Applicable uniquement aux modèles commandables : dcl, shutter, plug, dimmer,
-        generic. Les switches (réception seule) n'ont pas de mécanisme de pairing.
+        Applicable aux modèles : dcl, shutter, plug, dimmer, generic.
+        Les switches (réception seule) n'ont pas de mécanisme de pairing.
         """
         uuid = uuid.lower()
         device = self.devices.get(uuid)
@@ -248,8 +275,11 @@ class OdaceSFSPCoordinator:
             self.jeedom_key,
             self.dongle_mac,
         )
-        await async_send(self.hci_index, payload)
-        _LOGGER.info("Odace SFSP PAIR envoyé → uuid=%s", uuid)
+        await self._dispatch_send(payload)
+        _LOGGER.info(
+            "Odace SFSP PAIR [%s] envoyé → uuid=%s",
+            self.send_mode, uuid,
+        )
 
     def was_commanded_recently(self, uuid: str, ac: str, window: float = 2.0) -> bool:
         """Anti-boucle : True si on vient d'envoyer cette commande pour ce uuid."""
@@ -266,33 +296,30 @@ class OdaceSFSPCoordinator:
 
         Si des trames binding ont été reçues récemment (dans la fenêtre
         _PENDING_BINDING_TTL) alors que le mode apprentissage était off,
-        elles sont traitées immédiatement sans que l'utilisateur ait à
-        appuyer à nouveau sur le bouton du périphérique.
+        elles sont traitées immédiatement.
         """
         self.learn_mode = True
         self._learn_expires = time.time() + timeout
 
-        # Traiter les bindings en attente non expirés
         now = time.time()
         pending = {
-            uuid: entry
-            for uuid, entry in self._pending_bindings.items()
-            if now < entry["expires"] and uuid not in self.devices
+            uid: e
+            for uid, e in self._pending_bindings.items()
+            if now < e["expires"] and uid not in self.devices
         }
         if pending:
-            # Prendre le plus récent (dernier reçu)
-            uuid, entry = max(pending.items(), key=lambda kv: kv[1]["expires"])
+            uid, entry = max(pending.items(), key=lambda kv: kv[1]["expires"])
             _LOGGER.info(
                 "Learn mode: traitement du binding en attente pour %s (reçu il y a %.0fs)",
-                uuid, now - (entry["expires"] - _PENDING_BINDING_TTL),
+                uid, now - (entry["expires"] - _PENDING_BINDING_TTL),
             )
             self.learn_mode = False
-            self._pending_bindings.pop(uuid, None)
+            self._pending_bindings.pop(uid, None)
             self._schedule_new_device(entry["result"])
         else:
             _LOGGER.info(
-                "Learn mode activé pour %ds — appuyer sur le bouton de binding du périphérique",
-                timeout,
+                "Learn mode activé pour %ds [%s] — appuyer sur le bouton de binding",
+                timeout, self.send_mode,
             )
 
     def stop_learn(self) -> None:

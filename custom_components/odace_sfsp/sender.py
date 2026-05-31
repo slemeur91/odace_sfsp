@@ -1,17 +1,21 @@
-"""Génération et envoi de trames BLE Beagle (port de sendadv.py).
+"""Génération et envoi de trames BLE Beagle.
 
-L'envoi utilise ``hcitool`` (identique au daemon Jeedom) car il nécessite une
-écriture directe de la charge ``Set Advertising Data`` que ``bleak`` ne sait
-pas produire. Sur HAOS / Supervised, HA tourne en root dans le container :
-``sudo`` n'existe pas et n'est pas nécessaire — les commandes ``hcitool``
-sont appelées directement.
+Deux modes d'envoi sont disponibles :
+
+- ``async_send`` : envoi via ``hcitool`` sur un contrôleur HCI local
+  (dongle USB sur HAOS, Proxmox, etc.). Utilisé quand CONF_SEND_MODE == "hci".
+
+- ``async_send_mqtt`` : publication sur un topic MQTT, l'ESP32 souscrit
+  et diffuse le paquet BLE advertising. Utilisé quand CONF_SEND_MODE == "mqtt".
+
+La construction et le chiffrement des trames (build_frame, craft_payload)
+sont communs aux deux modes.
 """
 from __future__ import annotations
 
 import asyncio
 import binascii
 import logging
-import os
 import secrets
 from typing import Any, Dict
 
@@ -34,6 +38,10 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Construction de trame (commune aux deux modes d'envoi)
+# ---------------------------------------------------------------------------
 
 def _random_counter() -> str:
     return binascii.hexlify(secrets.token_bytes(2)).decode().upper()
@@ -94,8 +102,19 @@ def _cmac_hash(secret: str, buffer: bytes) -> str:
     return binascii.hexlify(bytearray(c.finalize())).decode()
 
 
-def craft_payload(device: Dict[str, Any], frame_type: str, jeedom_key: str, dongle_mac: str, data: Any = "") -> str:
-    """Construit la trame finale (62 caractères hex)."""
+def craft_payload(
+    device: Dict[str, Any],
+    frame_type: str,
+    jeedom_key: str,
+    dongle_mac: str,
+    data: Any = "",
+) -> str:
+    """Construit la trame finale (62 caractères hex).
+
+    ``dongle_mac`` est la MAC du contrôleur BLE :
+    - Mode HCI  : MAC du dongle USB (lue depuis sysfs/hciconfig)
+    - Mode ESP32 : MAC Bluetooth de l'ESP32 (saisie dans le config flow)
+    """
     frame = build_frame(device, frame_type, jeedom_key, data)
     buffer = _compute_buffer(dongle_mac, frame)
     if frame_type == "pair":
@@ -122,17 +141,20 @@ def validate_payload(payload: str) -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# Mode HCI — envoi via hcitool (dongle USB local)
+# ---------------------------------------------------------------------------
+
 async def async_send(hci_index: int, payload: str) -> bool:
     """Envoie la trame via ``hcitool`` sur le contrôleur ``hciX``.
 
     Après l'envoi, le scan passif est restauré explicitement au niveau HCI pour
-    resynchroniser l'état hardware avec BlueZ (qui ne voit pas les commandes
-    hcitool raw et resterait sinon dans un état incohérent).
+    resynchroniser l'état hardware avec BlueZ.
     """
     if not validate_payload(payload):
         return False
     payload_spaced = " ".join(payload[i : i + 2] for i in range(0, len(payload), 2)).upper()
-    _LOGGER.info("Send to BLE: %s", payload_spaced)
+    _LOGGER.info("Send to BLE [HCI hci%d]: %s", hci_index, payload_spaced)
     cmds = [
         f"hcitool -i hci{hci_index} cmd 0x08 0x0008 1F {payload_spaced}",
         f"hcitool -i hci{hci_index} cmd 0x08 0x0006 A0 00 A0 00 03 00 00 00 00 00 00 00 00 07 00",
@@ -147,7 +169,7 @@ async def async_send(hci_index: int, payload: str) -> bool:
             _LOGGER.warning("hcitool failed (%s): %s", cmd, err.decode(errors="ignore"))
     await asyncio.sleep(0.5)
 
-    # Désactive l'advertising — attendu explicitement avant de restaurer le scan
+    # Désactive l'advertising
     proc = await asyncio.create_subprocess_shell(
         f"hcitool -i hci{hci_index} cmd 0x08 0x000a 00",
         stdout=asyncio.subprocess.DEVNULL,
@@ -157,14 +179,9 @@ async def async_send(hci_index: int, payload: str) -> bool:
     if proc.returncode != 0:
         _LOGGER.warning("hcitool disable adv failed: %s", err.decode(errors="ignore"))
 
-    # Restaure le scan passif LE pour resynchroniser l'état hardware avec BlueZ.
-    # Sans cela, BlueZ croit toujours que le scan est actif alors que le hardware
-    # l'a suspendu pendant la phase d'advertising, ce qui provoque des erreurs
-    # "No discovery started" et des tentatives de recovery sur le dongle.
+    # Restaure le scan passif LE
     restore_cmds = [
-        # HCI_LE_Set_Scan_Parameters : passif, interval 10 ms, window 10 ms
         f"hcitool -i hci{hci_index} cmd 0x08 0x000b 00 10 00 10 00 00 00",
-        # HCI_LE_Set_Scan_Enable : enable, no duplicate filter
         f"hcitool -i hci{hci_index} cmd 0x08 0x000c 01 00",
     ]
     for cmd in restore_cmds:
@@ -178,8 +195,48 @@ async def async_send(hci_index: int, payload: str) -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# Mode ESP32 — envoi via MQTT
+# ---------------------------------------------------------------------------
+
+async def async_send_mqtt(hass, topic: str, payload: str) -> bool:
+    """Publie la trame BLE sur un topic MQTT pour qu'un ESP32 la diffuse.
+
+    L'ESP32 (ESPHome) souscrit à ``topic``, reçoit le payload hex (62 chars)
+    et le diffuse comme un paquet BLE advertising non-connectable.
+
+    Retourne True si la publication a réussi, False sinon.
+    """
+    if not validate_payload(payload):
+        _LOGGER.warning("Payload invalide, envoi MQTT annulé : %s", payload)
+        return False
+
+    payload_clean = payload.replace(" ", "").upper()
+
+    try:
+        from homeassistant.components import mqtt as ha_mqtt
+
+        if not await ha_mqtt.async_wait_for_mqtt_client(hass):
+            _LOGGER.error(
+                "Client MQTT non disponible — vérifier la configuration MQTT dans HA"
+            )
+            return False
+
+        await ha_mqtt.async_publish(hass, topic, payload_clean, qos=1, retain=False)
+        _LOGGER.info("Send to BLE [ESP32 MQTT %s]: %s", topic, payload_clean)
+        return True
+
+    except Exception as err:
+        _LOGGER.error("Erreur lors de la publication MQTT : %s", err)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Utilitaires HCI
+# ---------------------------------------------------------------------------
+
 def hci_index_from_name(name: str) -> int:
-    """``hci0`` -> 0, ``hci2`` -> 2."""
+    """``hci0`` → 0, ``hci2`` → 2. Retourne 0 pour les noms non-HCI (ESP32)."""
     try:
         return int(name.replace("hci", "").strip() or 0)
     except ValueError:
@@ -190,11 +247,10 @@ def read_controller_mac(hci_name: str) -> str | None:
     """Lit la MAC d'un contrôleur Bluetooth (lecture synchrone).
 
     Ordre de tentatives :
-    1. sysfs  ``/sys/class/bluetooth/<hci>/address``  (sans outil externe,
-       fonctionne sur HAOS, Supervised, Proxmox LXC, VM)
-    2. ``hciconfig <hci>``  (outil BlueZ, parfois absent dans les containers)
+    1. sysfs ``/sys/class/bluetooth/<hci>/address`` (sans outil externe)
+    2. ``hciconfig <hci>`` (fallback si sysfs indisponible)
     """
-    # 1. sysfs — disponible sans dépendance externe
+    # 1. sysfs
     try:
         sysfs = f"/sys/class/bluetooth/{hci_name}/address"
         with open(sysfs) as fh:
@@ -205,10 +261,9 @@ def read_controller_mac(hci_name: str) -> str | None:
     except Exception:
         pass
 
-    # 2. hciconfig — fallback si sysfs indisponible
+    # 2. hciconfig
     try:
         import subprocess
-
         out = subprocess.check_output(
             ["hciconfig", hci_name], stderr=subprocess.STDOUT
         ).decode()

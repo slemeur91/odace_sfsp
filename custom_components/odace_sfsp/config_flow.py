@@ -1,14 +1,27 @@
-"""Config flow : découverte HCI, auto-MAC, et options (ajout/suppr. devices).
+"""Config flow : sélection du mode d'envoi BLE (dongle HCI ou ESP32/MQTT).
 
-La première étape liste tous les adaptateurs Bluetooth connus par Home
-Assistant (``bluetooth.async_get_scanner`` + ``hciconfig``). L'utilisateur
-choisit son adaptateur (``hci0`` par défaut) et la MAC est récupérée
-automatiquement. Les équipements historiques Jeedom (``KNOWN_DEVICES``) sont
-pré-importés.
+Étapes pour une nouvelle installation :
+  async_step_user        → Choix du mode (HCI ou ESP32/MQTT)
+    ↓ HCI
+  async_step_hci         → Sélection du dongle + clé Jeedom
+    ↓ ESP32
+  async_step_mqtt_broker → Saisie du topic MQTT
+  async_step_mqtt_mac    → Découverte automatique MAC ESP32 (8 s) ou saisie manuelle
+
+Découverte automatique de la MAC ESP32 :
+  L'ESP32 publie sa MAC Bluetooth sur ``odace_sfsp/mac`` à la connexion MQTT.
+  Le config flow souscrit à ce topic et attend 8 secondes.
+  Si reçue → champ pré-rempli (modifiable). Si timeout → saisie manuelle.
+
+Rétrocompatibilité :
+  Les installations existantes (sans CONF_SEND_MODE) continuent de fonctionner
+  en mode HCI grâce aux valeurs par défaut du coordinator.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 import secrets
 from typing import Any, Dict
 
@@ -16,6 +29,7 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.components import bluetooth
+from homeassistant.components import mqtt as ha_mqtt
 from homeassistant.const import CONF_MAC
 from homeassistant.data_entry_flow import FlowResult
 
@@ -25,25 +39,37 @@ from .const import (
     CONF_HCI,
     CONF_JEEDOM_KEY,
     CONF_MODEL,
+    CONF_MQTT_TOPIC,
     CONF_NAME,
+    CONF_SEND_MODE,
     CONF_UUID,
     DEFAULT_HCI,
+    DEFAULT_MQTT_MAC_TOPIC,
+    DEFAULT_MQTT_TOPIC,
     DOMAIN,
-    KNOWN_DEVICES,
-    SUPPORTED_MODELS,
-    FORCE_JEEDOM_KEY,
     FORCE_DONGLE_MAC,
+    FORCE_JEEDOM_KEY,
+    KNOWN_DEVICES,
+    MAC_DISCOVERY_TIMEOUT,
+    SEND_MODE_HCI,
+    SEND_MODE_MQTT,
+    SUPPORTED_MODELS,
 )
 
 _LOGGER = logging.getLogger(__name__)
+_MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 
+
+def _is_valid_mac(mac: str) -> bool:
+    return bool(_MAC_RE.match(mac.strip()))
+
+
+# ---------------------------------------------------------------------------
+# Helpers partagés
+# ---------------------------------------------------------------------------
 
 def _get_adapter_address_sync(adapter_name: str, details: Any) -> str:
-    """Extrait la MAC depuis un objet AdapterDetails — sans I/O bloquant.
-
-    Retourne une chaîne vide si l'adresse est absente ou nulle (le fallback
-    sysfs sera réalisé séparément dans un executor).
-    """
+    """Extrait la MAC depuis un AdapterDetails HA — sans I/O bloquant."""
     if hasattr(details, "address"):
         address = details.address or ""
     elif isinstance(details, dict):
@@ -54,10 +80,7 @@ def _get_adapter_address_sync(adapter_name: str, details: Any) -> str:
 
 
 def _scan_sysfs_adapters() -> Dict[str, str]:
-    """Énumère les adaptateurs HCI depuis sysfs et lit leur MAC (exécution synchrone).
-
-    Destiné à être appelé via ``hass.async_add_executor_job`` uniquement.
-    """
+    """Énumère les adaptateurs HCI depuis sysfs (exécution synchrone via executor)."""
     import os
     result: Dict[str, str] = {}
     try:
@@ -71,55 +94,121 @@ def _scan_sysfs_adapters() -> Dict[str, str]:
 
 
 async def _list_hci_adapters(hass) -> Dict[str, str]:
-    """Retourne ``{adapter_name: 'name (MAC)'}`` pour tous les contrôleurs BLE connus.
-
-    Couvre :
-    - les dongles HCI natifs  (clé = "hci0", "hci1", …) — MAC lue depuis HA
-      ou en fallback depuis sysfs/hciconfig via executor
-    - les proxies ESP32/ESPHome (clé = adresse MAC de l'ESP32)
-
-    Toutes les opérations I/O bloquantes (sysfs, hciconfig) sont déléguées
-    à ``hass.async_add_executor_job`` pour ne pas bloquer la boucle asyncio.
-    """
+    """Retourne {adapter_name: 'name (MAC)'} pour tous les contrôleurs BLE."""
     adapters: Dict[str, str] = {}
     try:
         for adapter_name, details in bluetooth.async_get_adapters(hass).items():
             address = _get_adapter_address_sync(adapter_name, details)
-            # Adresse absente dans HA pour un dongle HCI natif → lire via executor
             if not address and adapter_name.startswith("hci"):
                 address = (
                     await hass.async_add_executor_job(read_controller_mac, adapter_name)
                     or "00:00:00:00:00:00"
                 )
             adapters[adapter_name] = f"{adapter_name} ({address or '00:00:00:00:00:00'})"
-    except Exception as err:  # pragma: no cover
-        _LOGGER.debug("Unable to list adapters via HA: %s", err)
-
-    # Dernier recours : énumération sysfs entière via executor
+    except Exception as err:
+        _LOGGER.debug("Unable to list adapters: %s", err)
     if not adapters:
         adapters = await hass.async_add_executor_job(_scan_sysfs_adapters)
-
     if not adapters:
         adapters = {DEFAULT_HCI: f"{DEFAULT_HCI} (00:00:00:00:00:00)"}
     return adapters
 
 
+async def _discover_esp32_mac(hass, mac_topic: str, timeout: int) -> str | None:
+    """Souscrit au topic MQTT et attend la MAC Bluetooth de l'ESP32.
+
+    L'ESP32 (ESPHome) publie sa MAC sur ce topic à la connexion MQTT.
+    Retourne la MAC si reçue dans le délai, sinon None.
+    """
+    discovered: asyncio.Future = hass.loop.create_future()
+
+    def _on_mac_message(msg) -> None:
+        raw = msg.payload.strip() if isinstance(msg.payload, str) else msg.payload.decode().strip()
+        if _is_valid_mac(raw) and not discovered.done():
+            discovered.set_result(raw.upper())
+
+    try:
+        unsubscribe = await ha_mqtt.async_subscribe(hass, mac_topic, _on_mac_message)
+        try:
+            return await asyncio.wait_for(asyncio.shield(discovered), timeout=timeout)
+        except asyncio.TimeoutError:
+            return None
+        finally:
+            unsubscribe()
+    except Exception as err:
+        _LOGGER.debug("ESP32 MAC discovery failed: %s", err)
+        return None
+
+
+def _import_known_devices() -> Dict[str, Any]:
+    return {
+        uuid.lower(): {
+            "uuid": uuid.lower(),
+            "mac": info["mac"],
+            "model": info["model"],
+            "name": info["name"],
+        }
+        for uuid, info in KNOWN_DEVICES.items()
+    }
+
+
+# ---------------------------------------------------------------------------
+# Config flow
+# ---------------------------------------------------------------------------
+
 class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Config flow initial : sélection du contrôleur BLE."""
+    """Config flow Odace SFSP — mode HCI ou ESP32/MQTT."""
 
     VERSION = 1
 
-    async def async_step_user(self, user_input: Dict[str, Any] | None = None) -> FlowResult:
-        # Toutes les I/O bloquantes (sysfs, hciconfig) sont dans l'executor via _list_hci_adapters
-        adapters = await _list_hci_adapters(self.hass)
+    def __init__(self) -> None:
+        super().__init__()
+        self._send_mode: str = SEND_MODE_HCI
+        self._mqtt_topic: str = DEFAULT_MQTT_TOPIC
+        self._esp32_mac: str = ""
 
-        # Si FORCE_JEEDOM_KEY est défini, l'afficher à la place d'une clé générée
-        default_jeedom_key = FORCE_JEEDOM_KEY if FORCE_JEEDOM_KEY else secrets.token_hex(12)
+    # ------------------------------------------------------------------
+    # Étape 1 : choix du mode
+    # ------------------------------------------------------------------
+    async def async_step_user(
+        self, user_input: Dict[str, Any] | None = None
+    ) -> FlowResult:
+        if user_input is not None:
+            self._send_mode = user_input[CONF_SEND_MODE]
+            if self._send_mode == SEND_MODE_MQTT:
+                return await self.async_step_mqtt_broker()
+            return await self.async_step_hci()
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_SEND_MODE, default=SEND_MODE_HCI): vol.In(
+                        {
+                            SEND_MODE_HCI:  "Dongle Bluetooth local (HAOS, Proxmox, USB)",
+                            SEND_MODE_MQTT: "ESP32 via MQTT (sans dongle USB sur HA)",
+                        }
+                    )
+                }
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # Branche HCI
+    # ------------------------------------------------------------------
+    async def async_step_hci(
+        self, user_input: Dict[str, Any] | None = None
+    ) -> FlowResult:
+        adapters = await _list_hci_adapters(self.hass)
+        default_key = FORCE_JEEDOM_KEY if FORCE_JEEDOM_KEY else secrets.token_hex(12)
+
+        if FORCE_DONGLE_MAC:
+            adapters_labels = {k: f"{k} ({FORCE_DONGLE_MAC})" for k in adapters}
+        else:
+            adapters_labels = adapters
 
         if user_input is not None:
             hci_name = user_input[CONF_HCI]
-
-            # Résolution de la MAC : HA d'abord (pas d'I/O), puis executor pour sysfs/hciconfig
             mac: str | None = None
             try:
                 ha_adapters = bluetooth.async_get_adapters(self.hass)
@@ -129,89 +218,235 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 pass
             if not mac:
                 mac = await self.hass.async_add_executor_job(read_controller_mac, hci_name)
-
             mac = mac or "00:00:00:00:00:00"
 
             await self.async_set_unique_id(f"odace_sfsp-{mac}")
             self._abort_if_unique_id_configured()
 
-            # Import automatique des appareils Jeedom connus
-            devices = {
-                uuid.lower(): {
-                    "uuid": uuid.lower(),
-                    "mac": info["mac"],
-                    "model": info["model"],
-                    "name": info["name"],
-                }
-                for uuid, info in KNOWN_DEVICES.items()
-            }
-
             return self.async_create_entry(
                 title=f"Odace SFSP ({hci_name})",
                 data={
+                    CONF_SEND_MODE: SEND_MODE_HCI,
                     CONF_HCI: hci_name,
                     CONF_MAC: mac,
                     CONF_JEEDOM_KEY: user_input.get(CONF_JEEDOM_KEY) or secrets.token_hex(12),
-                    CONF_DEVICES: devices,
+                    CONF_DEVICES: _import_known_devices(),
                 },
             )
 
-        # Si FORCE_DONGLE_MAC est défini, l'afficher à la place de la MAC système
-        # dans le sélecteur ET dans la description
-        if FORCE_DONGLE_MAC:
-            adapters_labels = {k: f"{k} ({FORCE_DONGLE_MAC})" for k in adapters.keys()}
-        else:
-            adapters_labels = adapters
-
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_HCI, default=DEFAULT_HCI): vol.In(adapters_labels),
-                vol.Optional(CONF_JEEDOM_KEY, default=default_jeedom_key): str,
-            }
-        )
         return self.async_show_form(
-            step_id="user",
-            data_schema=schema,
+            step_id="hci",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_HCI, default=DEFAULT_HCI): vol.In(adapters_labels),
+                    vol.Optional(CONF_JEEDOM_KEY, default=default_key): str,
+                }
+            ),
             description_placeholders={
                 "adapters": ", ".join(adapters_labels.values()),
-                "default_key": default_jeedom_key,
+                "default_key": default_key,
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # Branche ESP32/MQTT — Étape 2a : topic
+    # ------------------------------------------------------------------
+    async def async_step_mqtt_broker(
+        self, user_input: Dict[str, Any] | None = None
+    ) -> FlowResult:
+        if not await ha_mqtt.async_wait_for_mqtt_client(self.hass):
+            return self.async_abort(reason="mqtt_not_configured")
+
+        if user_input is not None:
+            self._mqtt_topic = user_input[CONF_MQTT_TOPIC].strip()
+            return await self.async_step_mqtt_mac()
+
+        return self.async_show_form(
+            step_id="mqtt_broker",
+            data_schema=vol.Schema(
+                {vol.Required(CONF_MQTT_TOPIC, default=DEFAULT_MQTT_TOPIC): str}
+            ),
+            description_placeholders={
+                "mac_topic": DEFAULT_MQTT_MAC_TOPIC,
+                "timeout": str(MAC_DISCOVERY_TIMEOUT),
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # Branche ESP32/MQTT — Étape 2b : découverte + saisie MAC ESP32
+    # ------------------------------------------------------------------
+    async def async_step_mqtt_mac(
+        self, user_input: Dict[str, Any] | None = None
+    ) -> FlowResult:
+        errors: Dict[str, str] = {}
+        default_key = FORCE_JEEDOM_KEY if FORCE_JEEDOM_KEY else secrets.token_hex(12)
+
+        if user_input is not None:
+            esp32_mac = user_input[CONF_MAC].upper().strip()
+            if not _is_valid_mac(esp32_mac):
+                errors[CONF_MAC] = "invalid_mac"
+            if not errors:
+                await self.async_set_unique_id(f"odace_sfsp_esp32-{esp32_mac}")
+                self._abort_if_unique_id_configured()
+                return self.async_create_entry(
+                    title=f"Odace SFSP ESP32 ({esp32_mac})",
+                    data={
+                        CONF_SEND_MODE: SEND_MODE_MQTT,
+                        CONF_MAC: esp32_mac,
+                        CONF_MQTT_TOPIC: self._mqtt_topic,
+                        CONF_JEEDOM_KEY: user_input.get(CONF_JEEDOM_KEY) or secrets.token_hex(12),
+                        CONF_DEVICES: _import_known_devices(),
+                    },
+                )
+
+        # Tentative de découverte automatique de la MAC ESP32
+        mac_topic = f"{self._mqtt_topic.rsplit('/', 1)[0]}/mac"
+        _LOGGER.debug(
+            "Découverte MAC ESP32 : souscription à %s (%ds)...",
+            mac_topic, MAC_DISCOVERY_TIMEOUT,
+        )
+        discovered_mac = await _discover_esp32_mac(self.hass, mac_topic, MAC_DISCOVERY_TIMEOUT)
+        if discovered_mac:
+            _LOGGER.info("MAC ESP32 découverte automatiquement : %s", discovered_mac)
+        else:
+            _LOGGER.debug("Aucune réponse sur %s — saisie manuelle", mac_topic)
+        self._esp32_mac = discovered_mac or ""
+
+        return self.async_show_form(
+            step_id="mqtt_mac",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_MAC,
+                        description={"suggested_value": self._esp32_mac or "AA:BB:CC:DD:EE:FF"},
+                    ): str,
+                    vol.Optional(CONF_JEEDOM_KEY, default=default_key): str,
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "mac_found": discovered_mac or "",
+                "mac_topic": mac_topic,
+                "topic": self._mqtt_topic,
             },
         )
 
     @staticmethod
-    def async_get_options_flow(entry: config_entries.ConfigEntry) -> "OdaceSFSPOptionsFlow":
+    def async_get_options_flow(
+        entry: config_entries.ConfigEntry,
+    ) -> "OdaceSFSPOptionsFlow":
         return OdaceSFSPOptionsFlow(entry)
 
 
+# ---------------------------------------------------------------------------
+# Options flow
+# ---------------------------------------------------------------------------
+
 class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
-    """Ajout / modification / suppression manuelle de devices."""
+    """Gestion des devices + configuration réseau (HCI ou ESP32/MQTT)."""
 
     def __init__(self, entry: config_entries.ConfigEntry) -> None:
         self.entry = entry
+        self._editing: str = ""
 
-    async def async_step_init(self, user_input: Dict[str, Any] | None = None) -> FlowResult:
+    async def async_step_init(
+        self, user_input: Dict[str, Any] | None = None
+    ) -> FlowResult:
+        send_mode = self.entry.data.get(CONF_SEND_MODE, SEND_MODE_HCI)
+        network_label = (
+            "Modifier la configuration ESP32/MQTT"
+            if send_mode == SEND_MODE_MQTT
+            else "Modifier le dongle Bluetooth"
+        )
         if user_input is not None:
             action = user_input["action"]
+            if action == "network":
+                return await self.async_step_network()
             if action == "add":
                 return await self.async_step_add()
             if action == "edit":
                 return await self.async_step_select_edit()
             if action == "remove":
                 return await self.async_step_select_remove()
+
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
                     vol.Required("action", default="add"): vol.In(
-                        {"add": "Ajouter un périphérique", "edit": "Modifier", "remove": "Supprimer"}
+                        {
+                            "network": network_label,
+                            "add": "Ajouter un périphérique",
+                            "edit": "Modifier un périphérique",
+                            "remove": "Supprimer un périphérique",
+                        }
                     )
                 }
             ),
         )
 
+    # ---- Configuration réseau ----
+    async def async_step_network(
+        self, user_input: Dict[str, Any] | None = None
+    ) -> FlowResult:
+        send_mode = self.entry.data.get(CONF_SEND_MODE, SEND_MODE_HCI)
+        errors: Dict[str, str] = {}
+
+        if send_mode == SEND_MODE_MQTT:
+            current_mac = self.entry.data.get(CONF_MAC, "")
+            current_topic = self.entry.data.get(CONF_MQTT_TOPIC, DEFAULT_MQTT_TOPIC)
+            if user_input is not None:
+                esp32_mac = user_input[CONF_MAC].upper().strip()
+                if not _is_valid_mac(esp32_mac):
+                    errors[CONF_MAC] = "invalid_mac"
+                if not errors:
+                    self.hass.config_entries.async_update_entry(
+                        self.entry,
+                        data={
+                            **self.entry.data,
+                            CONF_MAC: esp32_mac,
+                            CONF_MQTT_TOPIC: user_input[CONF_MQTT_TOPIC].strip(),
+                        },
+                    )
+                    return self.async_create_entry(title="", data={})
+            return self.async_show_form(
+                step_id="network",
+                data_schema=vol.Schema(
+                    {
+                        vol.Required(CONF_MAC, default=current_mac): str,
+                        vol.Required(CONF_MQTT_TOPIC, default=current_topic): str,
+                    }
+                ),
+                errors=errors,
+            )
+
+        else:  # HCI
+            adapters = await _list_hci_adapters(self.hass)
+            current_hci = self.entry.data.get(CONF_HCI, DEFAULT_HCI)
+            if user_input is not None:
+                hci_name = user_input[CONF_HCI]
+                mac = await self.hass.async_add_executor_job(read_controller_mac, hci_name)
+                self.hass.config_entries.async_update_entry(
+                    self.entry,
+                    data={
+                        **self.entry.data,
+                        CONF_HCI: hci_name,
+                        CONF_MAC: mac or "00:00:00:00:00:00",
+                    },
+                )
+                return self.async_create_entry(title="", data={})
+            return self.async_show_form(
+                step_id="network",
+                data_schema=vol.Schema(
+                    {vol.Required(CONF_HCI, default=current_hci): vol.In(adapters)}
+                ),
+            )
+
     # ---- Ajout ----
-    async def async_step_add(self, user_input: Dict[str, Any] | None = None) -> FlowResult:
-        errors = {}
+    async def async_step_add(
+        self, user_input: Dict[str, Any] | None = None
+    ) -> FlowResult:
+        errors: Dict[str, str] = {}
         if user_input is not None:
             coord = self.hass.data[DOMAIN][self.entry.entry_id]
             uuid = user_input[CONF_UUID].lower()
@@ -227,23 +462,29 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                     }
                 )
                 return self.async_create_entry(title="", data={})
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_UUID): str,
-                vol.Required(CONF_NAME): str,
-                vol.Required(CONF_MODEL, default="dcl"): vol.In(SUPPORTED_MODELS),
-                vol.Optional(CONF_MAC, default=""): str,
-            }
+        return self.async_show_form(
+            step_id="add",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_UUID): str,
+                    vol.Required(CONF_NAME): str,
+                    vol.Required(CONF_MODEL, default="dcl"): vol.In(SUPPORTED_MODELS),
+                    vol.Optional(CONF_MAC, default=""): str,
+                }
+            ),
+            errors=errors,
         )
-        return self.async_show_form(step_id="add", data_schema=schema, errors=errors)
 
-    # ---- Edition ----
+    # ---- Édition ----
     async def async_step_select_edit(self, user_input=None) -> FlowResult:
         coord = self.hass.data[DOMAIN][self.entry.entry_id]
         if user_input is not None:
             self._editing = user_input["uuid"]
             return await self.async_step_edit()
-        choices = {uuid: f"{d.get('name','?')} [{d.get('model','?')}]" for uuid, d in coord.devices.items()}
+        choices = {
+            uid: f"{d.get('name', '?')} [{d.get('model', '?')}]"
+            for uid, d in coord.devices.items()
+        }
         return self.async_show_form(
             step_id="select_edit",
             data_schema=vol.Schema({vol.Required("uuid"): vol.In(choices)}),
@@ -255,14 +496,18 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             await coord.async_update_device(self._editing, user_input)
             return self.async_create_entry(title="", data={})
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_NAME, default=current.get("name", "")): str,
-                vol.Required(CONF_MODEL, default=current.get("model", "dcl")): vol.In(SUPPORTED_MODELS),
-                vol.Optional(CONF_MAC, default=current.get("mac", "")): str,
-            }
+        return self.async_show_form(
+            step_id="edit",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_NAME, default=current.get("name", "")): str,
+                    vol.Required(
+                        CONF_MODEL, default=current.get("model", "dcl")
+                    ): vol.In(SUPPORTED_MODELS),
+                    vol.Optional(CONF_MAC, default=current.get("mac", "")): str,
+                }
+            ),
         )
-        return self.async_show_form(step_id="edit", data_schema=schema)
 
     # ---- Suppression ----
     async def async_step_select_remove(self, user_input=None) -> FlowResult:
@@ -270,7 +515,10 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             await coord.async_remove_device(user_input["uuid"])
             return self.async_create_entry(title="", data={})
-        choices = {uuid: f"{d.get('name','?')} [{d.get('model','?')}]" for uuid, d in coord.devices.items()}
+        choices = {
+            uid: f"{d.get('name', '?')} [{d.get('model', '?')}]"
+            for uid, d in coord.devices.items()
+        }
         return self.async_show_form(
             step_id="select_remove",
             data_schema=vol.Schema({vol.Required("uuid"): vol.In(choices)}),

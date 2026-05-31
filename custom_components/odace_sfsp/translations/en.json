@@ -2,21 +2,53 @@
   "config": {
     "step": {
       "user": {
-        "title": "Odace SFSP Gateway",
-        "description": "Detected Bluetooth dongle: **{adapters}**\nThe Jeedom key is pre-filled (`{default_key}`). It can be changed in Jeedom → Plugins → Odace SFSP → Configuration.",
+        "title": "Odace SFSP — BLE send mode",
+        "description": "Choose how BLE commands will be sent to Schneider devices.",
+        "data": { "send_mode": "Send mode" }
+      },
+      "hci": {
+        "title": "Local Bluetooth dongle",
+        "description": "Detected dongle(s): **{adapters}**\nJeedom key pre-filled (`{default_key}`).",
         "data": {
           "hci": "Bluetooth controller",
           "jeedom_key": "Jeedom key (optional, to reuse an existing pairing)"
         }
+      },
+      "mqtt_broker": {
+        "title": "ESP32/MQTT configuration",
+        "description": "The ESP32 must publish its MAC on `{mac_topic}` at startup (auto-discovery in next step, timeout {timeout}s).",
+        "data": { "mqtt_topic": "MQTT topic for sending commands" }
+      },
+      "mqtt_mac": {
+        "title": "ESP32 MAC address",
+        "description": "MQTT topic: `{topic}`\nAuto-discovered MAC: **{mac_found}** (empty = not found → enter manually).",
+        "data": {
+          "mac": "ESP32 Bluetooth MAC address (XX:XX:XX:XX:XX:XX)",
+          "jeedom_key": "Jeedom key (optional)"
+        }
       }
     },
-    "abort": { "already_configured": "This gateway is already configured" }
+    "abort": {
+      "already_configured": "This gateway is already configured",
+      "mqtt_not_configured": "The MQTT integration is not configured in Home Assistant"
+    },
+    "error": {
+      "invalid_mac": "Invalid MAC address — expected format: AA:BB:CC:DD:EE:FF"
+    }
   },
   "options": {
     "step": {
       "init": {
         "title": "Manage Odace SFSP devices",
         "data": { "action": "Action" }
+      },
+      "network": {
+        "title": "Network configuration",
+        "data": {
+          "hci": "Bluetooth controller",
+          "mac": "ESP32 Bluetooth MAC address",
+          "mqtt_topic": "MQTT topic"
+        }
       },
       "add": {
         "title": "Add a device",
@@ -26,12 +58,16 @@
       "edit": { "title": "Edit", "data": { "name": "Name", "model": "Model", "mac": "MAC address" } },
       "select_remove": { "title": "Choose a device to remove", "data": { "uuid": "Device" } }
     },
-    "error": { "already_exists": "A device with this UUID already exists" }
+    "error": {
+      "already_exists": "A device with this UUID already exists",
+      "invalid_mac": "Invalid MAC address — expected format: AA:BB:CC:DD:EE:FF"
+    }
   },
   "services": {
     "send_command": { "name": "Send a command", "description": "Sends an Odace SFSP BLE frame" },
-    "start_learn": { "name": "Learn mode", "description": "Enables inclusion" },
+    "start_learn": { "name": "Learn mode", "description": "Enables inclusion (60 s default)" },
     "add_device": { "name": "Add a device", "description": "Manually add a device" },
-    "remove_device": { "name": "Remove a device", "description": "Removes a device" }
+    "remove_device": { "name": "Remove a device", "description": "Removes a device" },
+    "bind_device": { "name": "Bind a device", "description": "Sends the BLE pairing frame" }
   }
 }
