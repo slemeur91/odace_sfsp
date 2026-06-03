@@ -60,6 +60,10 @@ _LOGGER = logging.getLogger(__name__)
 _MAC_RE  = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 _UUID_RE = re.compile(r"^[0-9A-Fa-f]{6}$")
 
+# Clé utilisée dans le formulaire pour indiquer le format de l'UUID saisi
+_UUID_FORMAT_LOGS  = "logs"   # octets dans l'ordre BLE  (ex : 9c0300)
+_UUID_FORMAT_LABEL = "label"  # octets inversés / étiquette (ex : 00039c)
+
 
 def _is_valid_mac(mac: str) -> bool:
     return bool(_MAC_RE.match(mac.strip()))
@@ -68,6 +72,20 @@ def _is_valid_mac(mac: str) -> bool:
 def _is_valid_uuid(uuid: str) -> bool:
     """Valide que l'UUID est bien 6 caractères hexadécimaux (3 octets)."""
     return bool(_UUID_RE.match(uuid.strip()))
+
+
+def _reverse_uuid(uuid_hex: str) -> str:
+    """Inverse l'ordre des 3 octets d'un UUID 6-char hex. 9c0300 ↔ 00039c"""
+    h = uuid_hex.lower()
+    return h[4:6] + h[2:4] + h[0:2]
+
+
+def _normalize_uuid(uuid_raw: str, fmt: str) -> str:
+    """Retourne l'UUID en format logs (parser BLE), quel que soit le format saisi."""
+    uuid = uuid_raw.strip().lower()
+    if fmt == _UUID_FORMAT_LABEL:
+        uuid = _reverse_uuid(uuid)
+    return uuid
 
 
 # ---------------------------------------------------------------------------
@@ -349,12 +367,15 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 # ---------------------------------------------------------------------------
 
 class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
-    """Gestion des devices + configuration réseau (HCI ou ESP32/MQTT)."""
+    """Gestion des devices + configuration réseau + paramètres avancés."""
 
     def __init__(self, entry: config_entries.ConfigEntry) -> None:
         self.entry = entry
         self._editing: str = ""
 
+    # ------------------------------------------------------------------
+    # Menu principal
+    # ------------------------------------------------------------------
     async def async_step_init(
         self, user_input: Dict[str, Any] | None = None
     ) -> FlowResult:
@@ -374,6 +395,8 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                 return await self.async_step_select_edit()
             if action == "remove":
                 return await self.async_step_select_remove()
+            if action == "advanced":
+                return await self.async_step_advanced()
 
         return self.async_show_form(
             step_id="init",
@@ -381,17 +404,20 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                 {
                     vol.Required("action", default="add"): vol.In(
                         {
-                            "network": network_label,
-                            "add": "Ajouter un périphérique",
-                            "edit": "Modifier un périphérique",
-                            "remove": "Supprimer un périphérique",
+                            "add":      "Ajouter un périphérique",
+                            "edit":     "Modifier un périphérique",
+                            "remove":   "Supprimer un périphérique",
+                            "network":  network_label,
+                            "advanced": "Paramètres avancés (clé Jeedom, MAC)",
                         }
                     )
                 }
             ),
         )
 
-    # ---- Configuration réseau ----
+    # ------------------------------------------------------------------
+    # Configuration réseau (HCI ou ESP32/MQTT)
+    # ------------------------------------------------------------------
     async def async_step_network(
         self, user_input: Dict[str, Any] | None = None
     ) -> FlowResult:
@@ -448,42 +474,158 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                 ),
             )
 
-    # ---- Ajout ----
+    # ------------------------------------------------------------------
+    # Paramètres avancés : clé Jeedom + MAC contrôleur
+    # ------------------------------------------------------------------
+    async def async_step_advanced(
+        self, user_input: Dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Permet de visualiser et modifier la clé Jeedom et la MAC du contrôleur.
+
+        La clé Jeedom est utilisée pour le chiffrement CMAC des trames BLE.
+        La MAC est celle du dongle HCI ou de l'ESP32 selon le mode.
+        Modifier ces valeurs nécessite un re-pairing (bind_device) des périphériques.
+        """
+        current_key = self.entry.data.get(CONF_JEEDOM_KEY, "")
+        current_mac = self.entry.data.get(CONF_MAC, "00:00:00:00:00:00")
+        errors: Dict[str, str] = {}
+
+        if user_input is not None:
+            new_key = user_input.get(CONF_JEEDOM_KEY, "").strip()
+            new_mac = user_input.get(CONF_MAC, "").strip()
+            if new_mac and not _is_valid_mac(new_mac):
+                errors[CONF_MAC] = "invalid_mac"
+            if not errors:
+                new_data = {**self.entry.data}
+                if new_key:
+                    new_data[CONF_JEEDOM_KEY] = new_key
+                if new_mac:
+                    new_data[CONF_MAC] = new_mac.upper()
+                self.hass.config_entries.async_update_entry(self.entry, data=new_data)
+                return self.async_create_entry(title="", data={})
+
+        return self.async_show_form(
+            step_id="advanced",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_JEEDOM_KEY, default=current_key): str,
+                    vol.Optional(CONF_MAC, default=current_mac): str,
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "current_key": current_key or "(non définie)",
+                "current_mac": current_mac,
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # Ajout d'un périphérique (avec détection automatique depuis BLE)
+    # ------------------------------------------------------------------
     async def async_step_add(
         self, user_input: Dict[str, Any] | None = None
     ) -> FlowResult:
+        """Ajout d'un périphérique.
+
+        Si des trames de binding ont été reçues récemment (mode learn),
+        les UUIDs détectés sont proposés en pré-remplissage.
+        Le format de l'UUID peut être saisi :
+          - Depuis les logs/Jeedom : octets dans l'ordre BLE (ex: 9c0300)
+          - Depuis l'étiquette du module : octets inversés (ex: 00039c)
+        L'intégration convertit automatiquement selon le format choisi.
+        """
+        coord = self.hass.data[DOMAIN][self.entry.entry_id]
         errors: Dict[str, str] = {}
+
+        # Périphériques détectés récemment (pending bindings)
+        pending = coord.get_pending_uuids()
+        detected_choices: Dict[str, str] = {}
+        for p in pending:
+            label = (
+                f"{p['uuid']} ({p['model']}, il y a {p['seconds_ago']}s)"
+            )
+            detected_choices[p["uuid"]] = label
+        detected_choices["manual"] = "Saisir manuellement"
+
         if user_input is not None:
-            coord = self.hass.data[DOMAIN][self.entry.entry_id]
-            uuid = user_input[CONF_UUID].strip().lower()
-            if not _is_valid_uuid(uuid):
+            # Résolution UUID selon format et source
+            selected = user_input.get("detected_uuid", "manual")
+            if selected != "manual":
+                raw_uuid = selected
+                uuid_fmt = _UUID_FORMAT_LOGS  # déjà en format logs
+            else:
+                raw_uuid = user_input.get(CONF_UUID, "").strip()
+                uuid_fmt = user_input.get("uuid_format", _UUID_FORMAT_LOGS)
+
+            uuid = _normalize_uuid(raw_uuid, uuid_fmt) if raw_uuid else ""
+
+            if not uuid or not _is_valid_uuid(uuid):
                 errors[CONF_UUID] = "invalid_uuid"
             elif uuid in coord.devices:
                 errors["base"] = "already_exists"
             else:
+                name = user_input.get(CONF_NAME, "").strip()
+                model = user_input.get(CONF_MODEL, "dcl")
+                if not name:
+                    name = f"Odace SFSP {model} {uuid}"
                 await coord.async_add_device(
                     {
                         CONF_UUID: uuid,
                         CONF_MAC: user_input.get(CONF_MAC, ""),
-                        CONF_MODEL: user_input[CONF_MODEL],
-                        CONF_NAME: user_input[CONF_NAME],
+                        CONF_MODEL: model,
+                        CONF_NAME: name,
                     }
                 )
                 return self.async_create_entry(title="", data={})
-        return self.async_show_form(
-            step_id="add",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_UUID): str,
-                    vol.Required(CONF_NAME): str,
-                    vol.Required(CONF_MODEL, default="dcl"): vol.In(SUPPORTED_MODELS),
-                    vol.Optional(CONF_MAC, default=""): str,
-                }
-            ),
-            errors=errors,
+
+        # Pré-remplir l'UUID si un seul périphérique est en attente
+        default_uuid = pending[0]["uuid"] if len(pending) == 1 else ""
+        default_model = pending[0]["model"] if len(pending) == 1 else "dcl"
+
+        schema_fields: Dict[Any, Any] = {}
+        if detected_choices:
+            default_detected = pending[0]["uuid"] if len(pending) == 1 else "manual"
+            schema_fields[vol.Required("detected_uuid", default=default_detected)] = vol.In(detected_choices)
+
+        schema_fields.update(
+            {
+                vol.Required("uuid_format", default=_UUID_FORMAT_LOGS): vol.In(
+                    {
+                        _UUID_FORMAT_LOGS:  "Format logs/Jeedom (ex : 9c0300)",
+                        _UUID_FORMAT_LABEL: "Format étiquette module (octets inversés, ex : 00039c)",
+                    }
+                ),
+                vol.Optional(CONF_UUID, default=default_uuid): str,
+                vol.Optional(CONF_NAME, default=""): str,
+                vol.Required(CONF_MODEL, default=default_model): vol.In(SUPPORTED_MODELS),
+                vol.Optional(CONF_MAC, default=""): str,
+            }
         )
 
-    # ---- Édition ----
+        # Préparer les placeholders pour les UUIDs en attente
+        pending_info = (
+            ", ".join(f"{p['uuid']} ({p['model']})" for p in pending)
+            if pending
+            else "aucun (appuyer sur le bouton de binding puis appeler start_learn)"
+        )
+        reversed_hint = (
+            f"{_reverse_uuid(pending[0]['uuid'])}" if len(pending) == 1
+            else "—"
+        )
+
+        return self.async_show_form(
+            step_id="add",
+            data_schema=vol.Schema(schema_fields),
+            errors=errors,
+            description_placeholders={
+                "pending": pending_info,
+                "reversed_hint": reversed_hint,
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # Édition d'un périphérique
+    # ------------------------------------------------------------------
     async def async_step_select_edit(self, user_input=None) -> FlowResult:
         coord = self.hass.data[DOMAIN][self.entry.entry_id]
         if user_input is not None:
@@ -502,8 +644,12 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
         coord = self.hass.data[DOMAIN][self.entry.entry_id]
         current = coord.devices[self._editing]
         errors: Dict[str, str] = {}
+
         if user_input is not None:
-            new_uuid = user_input.get(CONF_UUID, self._editing).strip().lower()
+            raw_uuid = user_input.get(CONF_UUID, self._editing).strip()
+            uuid_fmt = user_input.get("uuid_format", _UUID_FORMAT_LOGS)
+            new_uuid = _normalize_uuid(raw_uuid, uuid_fmt)
+
             if not _is_valid_uuid(new_uuid):
                 errors[CONF_UUID] = "invalid_uuid"
             else:
@@ -513,16 +659,23 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                     CONF_MAC: user_input.get(CONF_MAC, ""),
                 }
                 if new_uuid != self._editing:
-                    # UUID corrigé : supprimer l'ancien, ajouter le nouveau
                     await coord.async_remove_device(self._editing)
                     await coord.async_add_device({CONF_UUID: new_uuid, **updates})
                 else:
                     await coord.async_update_device(self._editing, updates)
                 return self.async_create_entry(title="", data={})
+
+        reversed_current = _reverse_uuid(self._editing)
         return self.async_show_form(
             step_id="edit",
             data_schema=vol.Schema(
                 {
+                    vol.Required("uuid_format", default=_UUID_FORMAT_LOGS): vol.In(
+                        {
+                            _UUID_FORMAT_LOGS:  "Format logs/Jeedom (ex : 9c0300)",
+                            _UUID_FORMAT_LABEL: "Format étiquette module (octets inversés, ex : 00039c)",
+                        }
+                    ),
                     vol.Required(CONF_UUID, default=self._editing): str,
                     vol.Required(CONF_NAME, default=current.get("name", "")): str,
                     vol.Required(
@@ -532,9 +685,15 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                 }
             ),
             errors=errors,
+            description_placeholders={
+                "current_uuid": self._editing,
+                "reversed_uuid": reversed_current,
+            },
         )
 
-    # ---- Suppression ----
+    # ------------------------------------------------------------------
+    # Suppression d'un périphérique
+    # ------------------------------------------------------------------
     async def async_step_select_remove(self, user_input=None) -> FlowResult:
         coord = self.hass.data[DOMAIN][self.entry.entry_id]
         if user_input is not None:

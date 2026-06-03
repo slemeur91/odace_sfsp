@@ -41,6 +41,7 @@ class OdaceSFSPLight(LightEntity):
     _attr_color_mode = ColorMode.ONOFF
     _attr_supported_color_modes = {ColorMode.ONOFF}
     _attr_should_poll = False
+    _attr_icon = "mdi:ceiling-light-outline"
 
     def __init__(self, coordinator: OdaceSFSPCoordinator, device: Dict[str, Any]) -> None:
         self._coord = coordinator

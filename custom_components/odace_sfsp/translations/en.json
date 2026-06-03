@@ -33,7 +33,8 @@
       "mqtt_not_configured": "The MQTT integration is not configured in Home Assistant"
     },
     "error": {
-      "invalid_mac": "Invalid MAC address — expected format: AA:BB:CC:DD:EE:FF"
+      "invalid_mac": "Invalid MAC address — expected format: AA:BB:CC:DD:EE:FF",
+      "invalid_uuid": "Invalid UUID — 6 hex characters required (e.g. 9c0300). Check that the bytes are not reversed."
     }
   },
   "options": {
@@ -50,16 +51,37 @@
           "mqtt_topic": "MQTT topic"
         }
       },
+      "advanced": {
+        "title": "Advanced settings",
+        "description": "**Current Jeedom key:** `{current_key}`\n**Current controller MAC:** `{current_mac}`\n\nChanging the Jeedom key requires re-pairing all commandable devices (use `bind_device` service). Leave a field empty to keep the current value.",
+        "data": {
+          "jeedom_key": "Jeedom key (leave empty to keep current)",
+          "mac": "BLE controller MAC (HCI dongle or ESP32 — leave empty to keep current)"
+        }
+      },
       "add": {
         "title": "Add a device",
-        "description": "The UUID is visible in the parser logs (e.g. `9c0300`). Enter in the exact order shown in the logs — do not reverse the bytes.",
-        "data": { "uuid": "UUID (6 hex characters, e.g. 9c0300)", "name": "Name", "model": "Model", "mac": "MAC address (optional)" }
+        "description": "Recently detected BLE devices: **{pending}**\n\n— **Logs/Jeedom** format: UUID as shown in logs (e.g. `9c0300`)\n— **Module label** format: reversed bytes (e.g. `00039c` → converted to `9c0300`)\n\nIf a detected device is selected, the UUID field is ignored.",
+        "data": {
+          "detected_uuid": "Detected BLE device (optional)",
+          "uuid_format": "UUID input format",
+          "uuid": "UUID (6 hex characters)",
+          "name": "Name (leave empty for automatic name)",
+          "model": "Model",
+          "mac": "BLE MAC address of the device (optional)"
+        }
       },
       "select_edit": { "title": "Choose a device to edit", "data": { "uuid": "Device" } },
       "edit": {
-        "title": "Edit",
-        "description": "The UUID must exactly match the one in the BLE logs (e.g. `9c0300`). If commands have no effect, check that the UUID is not byte-reversed.",
-        "data": { "uuid": "UUID (6 hex characters)", "name": "Name", "model": "Model", "mac": "MAC address" }
+        "title": "Edit device",
+        "description": "Current UUID: `{current_uuid}` — Label equivalent: `{reversed_uuid}`\n\nChoose the format in which you are entering the new UUID.",
+        "data": {
+          "uuid_format": "UUID input format",
+          "uuid": "UUID",
+          "name": "Name",
+          "model": "Model",
+          "mac": "BLE MAC address"
+        }
       },
       "select_remove": { "title": "Choose a device to remove", "data": { "uuid": "Device" } }
     },

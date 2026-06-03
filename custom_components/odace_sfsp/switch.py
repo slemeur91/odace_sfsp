@@ -68,6 +68,10 @@ class OdaceSFSPSwitch(SwitchEntity):
         "plug":    "odace_sfsp_plug",
         "generic": "odace_sfsp_generic",
     }
+    _MODEL_DEVICE_ICON = {
+        "plug":    "mdi:power-socket-fr",
+        "generic": "mdi:toggle-switch-variant-off",
+    }
 
     def __init__(self, coordinator: OdaceSFSPCoordinator, device: Dict[str, Any]) -> None:
         self._coord = coordinator
@@ -78,6 +82,7 @@ class OdaceSFSPSwitch(SwitchEntity):
         self._attr_unique_id = f"{self._MODEL_UNIQUE_PREFIX.get(model, 'odace_sfsp_switch')}_{self._uuid}"
         self._attr_name = device.get("name") or f"{self._MODEL_HA_MODEL.get(model, 'Odace SFSP')} {self._uuid}"
         self._attr_is_on = False
+        self._attr_icon = self._MODEL_DEVICE_ICON.get(model, "mdi:toggle-switch-variant-off")
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._uuid)},
             name=self._attr_name,

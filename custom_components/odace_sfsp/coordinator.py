@@ -15,6 +15,7 @@ import time
 from typing import Any, Dict, Optional
 
 from homeassistant.components import bluetooth
+from homeassistant.helpers import device_registry as dr
 from homeassistant.components.bluetooth import (
     BluetoothCallbackMatcher,
     BluetoothChange,
@@ -209,6 +210,11 @@ class OdaceSFSPCoordinator:
         uuid = uuid.lower()
         self.devices.pop(uuid, None)
         await self._async_persist()
+        # Supprimer le device (et ses entités) du registre HA
+        dev_reg = dr.async_get(self.hass)
+        device = dev_reg.async_get_device(identifiers={(DOMAIN, uuid)})
+        if device:
+            dev_reg.async_remove_device(device.id)
         async_dispatcher_send(self.hass, SIGNAL_DEVICES_CHANGED)
 
     async def async_update_device(self, uuid: str, updates: Dict[str, Any]) -> None:
@@ -217,6 +223,12 @@ class OdaceSFSPCoordinator:
             return
         self.devices[uuid].update(updates)
         await self._async_persist()
+        # Mettre à jour le nom dans le registre HA si besoin
+        if "name" in updates:
+            dev_reg = dr.async_get(self.hass)
+            device = dev_reg.async_get_device(identifiers={(DOMAIN, uuid)})
+            if device:
+                dev_reg.async_update_device(device.id, name=updates["name"])
         async_dispatcher_send(self.hass, SIGNAL_DEVICES_CHANGED)
 
     async def _async_persist(self) -> None:
@@ -324,3 +336,20 @@ class OdaceSFSPCoordinator:
 
     def stop_learn(self) -> None:
         self.learn_mode = False
+
+    def get_pending_uuids(self) -> list:
+        """Retourne les UUIDs récemment vus en mode binding (non encore enregistrés).
+
+        Utilisé par le config flow pour pré-remplir l'UUID lors d'un ajout manuel.
+        Chaque entrée : {"uuid": str, "model": str, "seconds_ago": int}.
+        """
+        now = time.time()
+        result = []
+        for uid, entry in self._pending_bindings.items():
+            if now < entry["expires"] and uid not in self.devices:
+                result.append({
+                    "uuid": uid,
+                    "model": entry["result"].get("model", "unknown"),
+                    "seconds_ago": int(now - (entry["expires"] - _PENDING_BINDING_TTL)),
+                })
+        return sorted(result, key=lambda x: x["seconds_ago"])

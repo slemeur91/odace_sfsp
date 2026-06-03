@@ -33,7 +33,8 @@
       "mqtt_not_configured": "L'intégration MQTT n'est pas configurée dans Home Assistant"
     },
     "error": {
-      "invalid_mac": "Adresse MAC invalide — format attendu : AA:BB:CC:DD:EE:FF"
+      "invalid_mac": "Adresse MAC invalide — format attendu : AA:BB:CC:DD:EE:FF",
+      "invalid_uuid": "UUID invalide — 6 caractères hexadécimaux requis (ex : 9c0300). Vérifier que les octets ne sont pas inversés."
     }
   },
   "options": {
@@ -50,16 +51,37 @@
           "mqtt_topic": "Topic MQTT"
         }
       },
+      "advanced": {
+        "title": "Paramètres avancés",
+        "description": "**Clé Jeedom actuelle :** `{current_key}`\n**MAC contrôleur actuelle :** `{current_mac}`\n\nModifier la clé Jeedom nécessite un re-pairing de tous les périphériques commandables (service `bind_device`). Laisser un champ vide pour ne pas le modifier.",
+        "data": {
+          "jeedom_key": "Clé Jeedom (laisser vide pour conserver)",
+          "mac": "MAC du contrôleur BLE (dongle HCI ou ESP32 — laisser vide pour conserver)"
+        }
+      },
       "add": {
         "title": "Ajouter un périphérique",
-        "description": "L'UUID est visible dans les logs du parser (ex : `9c0300`). Saisir dans l'ordre exact des logs, sans inverser les octets.",
-        "data": { "uuid": "UUID (6 caractères hex, ex : 9c0300)", "name": "Nom", "model": "Modèle", "mac": "Adresse MAC (optionnel)" }
+        "description": "Périphériques BLE détectés récemment : **{pending}**\n\n— Format **logs/Jeedom** : UUID tel qu'affiché dans les logs (ex : `9c0300`)\n— Format **étiquette module** : octets inversés (ex : `00039c` → converti en `9c0300`)\n\nSi un périphérique détecté est sélectionné, le champ UUID est ignoré.",
+        "data": {
+          "detected_uuid": "Périphérique BLE détecté (optionnel)",
+          "uuid_format": "Format de l'UUID saisi",
+          "uuid": "UUID (6 caractères hex)",
+          "name": "Nom (laissez vide pour nom automatique)",
+          "model": "Modèle",
+          "mac": "Adresse MAC BLE du périphérique (optionnel)"
+        }
       },
       "select_edit": { "title": "Choisir un périphérique à modifier", "data": { "uuid": "Périphérique" } },
       "edit": {
-        "title": "Modifier",
-        "description": "L'UUID doit correspondre exactement à celui des logs BLE (ex : `9c0300`). Si les commandes n'ont pas d'effet, vérifier que l'UUID n'est pas inversé.",
-        "data": { "uuid": "UUID (6 caractères hex)", "name": "Nom", "model": "Modèle", "mac": "Adresse MAC" }
+        "title": "Modifier le périphérique",
+        "description": "UUID actuel : `{current_uuid}` — Équivalent étiquette : `{reversed_uuid}`\n\nChoisissez le format dans lequel vous saisissez le nouvel UUID.",
+        "data": {
+          "uuid_format": "Format de l'UUID saisi",
+          "uuid": "UUID",
+          "name": "Nom",
+          "model": "Modèle",
+          "mac": "Adresse MAC BLE"
+        }
       },
       "select_remove": { "title": "Choisir un périphérique à supprimer", "data": { "uuid": "Périphérique" } }
     },

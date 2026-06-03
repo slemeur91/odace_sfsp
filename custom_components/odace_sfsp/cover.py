@@ -52,6 +52,7 @@ async def async_setup_entry(
 class OdaceSFSPCover(CoverEntity):
     _attr_should_poll = False
     _attr_device_class = CoverDeviceClass.SHUTTER
+    _attr_icon = "mdi:roller-blind"
     _attr_supported_features = (
         CoverEntityFeature.OPEN
         | CoverEntityFeature.CLOSE

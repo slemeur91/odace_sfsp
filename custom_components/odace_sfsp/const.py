@@ -122,8 +122,8 @@ KNOWN_DEVICES = {
 }
 # Exemple avec ma liste de périphériques
 #KNOWN_DEVICES = {
-#    "472500": {"uuid": "472500", "mac": "60:C0:BF:26:15:84", "model": "dcl", "name": "Plafonnier de la Salle de bain"},
 #    "362500": {"uuid": "362500", "mac": "60:C0:BF:25:FF:A9", "model": "dcl", "name": "Armoire de toilette de la Salle de bain"},
+#    "472500": {"uuid": "472500", "mac": "60:C0:BF:26:15:84", "model": "dcl", "name": "Plafonnier de la Salle de bain"},
 #    "8E2200": {"uuid": "8E2200", "mac": "60:C0:BF:25:FE:7B", "model": "dcl", "name": "Armoire de toilette de la Salle d'eau"},
 #    "832200": {"uuid": "832200", "mac": "60:C0:BF:25:F9:3A", "model": "dcl", "name": "Plafonnier de la Salle d'eau"},
 #    "943A00": {"uuid": "943A00", "mac": "60:C0:BF:30:2B:16", "model": "switch", "name": "Interrupteur de l'Armoire de toilette de la Salle de bain"},

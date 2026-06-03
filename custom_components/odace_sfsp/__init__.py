@@ -8,7 +8,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import device_registry as dr
 
-from .const import DOMAIN
+from .const import CONF_HCI, CONF_JEEDOM_KEY, CONF_MAC, CONF_MQTT_TOPIC, CONF_SEND_MODE, DOMAIN
 from .coordinator import OdaceSFSPCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -75,7 +75,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    await hass.config_entries.async_reload(entry.entry_id)
+    """Ne recharger que si les paramètres réseau ont réellement changé.
+
+    Les opérations sur les devices (ajout/modif/suppression) appellent
+    async_update_entry pour persister CONF_DEVICES, ce qui déclencherait
+    un rechargement inutile — et ferait disparaître les entités pendant
+    la session de configuration.
+    """
+    coord: OdaceSFSPCoordinator | None = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if coord is None:
+        await hass.config_entries.async_reload(entry.entry_id)
+        return
+    if (
+        entry.data.get(CONF_HCI) != coord.hci_name
+        or entry.data.get(CONF_MAC) != coord.dongle_mac
+        or entry.data.get(CONF_SEND_MODE) != coord.send_mode
+        or entry.data.get(CONF_MQTT_TOPIC) != coord.mqtt_topic
+        or entry.data.get(CONF_JEEDOM_KEY) != coord.jeedom_key
+    ):
+        await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

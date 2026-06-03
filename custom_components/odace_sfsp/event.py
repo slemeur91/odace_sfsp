@@ -58,6 +58,7 @@ async def async_setup_entry(
 class OdaceSFSPSwitchEvent(EventEntity):
     _attr_should_poll = False
     _attr_event_types = EVENT_TYPES
+    _attr_icon = "mdi:light-switch"
 
     def __init__(self, coordinator: OdaceSFSPCoordinator, device: Dict[str, Any]) -> None:
         self._coord = coordinator
