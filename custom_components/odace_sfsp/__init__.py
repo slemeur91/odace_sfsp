@@ -8,7 +8,16 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import device_registry as dr
 
-from .const import CONF_HCI, CONF_JEEDOM_KEY, CONF_MAC, CONF_MQTT_TOPIC, CONF_SEND_MODE, DOMAIN
+from .const import (
+    CONF_ESPHOME_ENTRY_ID,
+    CONF_ESPHOME_SERVICE,
+    CONF_HCI,
+    CONF_JEEDOM_KEY,
+    CONF_MAC,
+    CONF_MQTT_TOPIC,
+    CONF_SEND_MODE,
+    DOMAIN,
+)
 from .coordinator import OdaceSFSPCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -92,6 +101,8 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
         or entry.data.get(CONF_SEND_MODE) != coord.send_mode
         or entry.data.get(CONF_MQTT_TOPIC) != coord.mqtt_topic
         or entry.data.get(CONF_JEEDOM_KEY) != coord.jeedom_key
+        or entry.data.get(CONF_ESPHOME_ENTRY_ID) != coord.esphome_entry_id
+        or entry.data.get(CONF_ESPHOME_SERVICE) != coord.esphome_service
     ):
         await hass.config_entries.async_reload(entry.entry_id)
 

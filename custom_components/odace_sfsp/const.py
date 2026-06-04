@@ -22,16 +22,22 @@ DEFAULT_HCI = "hci0"
 
 # Mode d'envoi des trames BLE
 CONF_SEND_MODE = "send_mode"
-SEND_MODE_HCI  = "hci"   # Dongle USB local (HAOS, Proxmox, etc.) — hcitool
-SEND_MODE_MQTT = "mqtt"  # ESP32 via MQTT
+SEND_MODE_HCI         = "hci"          # Dongle USB local (HAOS, Proxmox, etc.) — hcitool
+SEND_MODE_MQTT        = "mqtt"         # ESP32 via MQTT
+SEND_MODE_ESPHOME_API = "esphome_api"  # ESP32 BLE proxy via API native ESPHome
 
-# Configuration MQTT (mode ESP32)
+# Configuration MQTT (mode ESP32/MQTT)
 CONF_MQTT_TOPIC = "mqtt_topic"
 DEFAULT_MQTT_TOPIC = "odace_sfsp/send"
 # Topic sur lequel l'ESP32 publie sa MAC Bluetooth au démarrage (découverte auto)
 DEFAULT_MQTT_MAC_TOPIC = "odace_sfsp/mac"
 # Durée max d'attente pour la découverte automatique de la MAC ESP32 (secondes)
 MAC_DISCOVERY_TIMEOUT = 8
+
+# Configuration ESPHome API (mode proxy natif)
+CONF_ESPHOME_ENTRY_ID = "esphome_entry_id"   # entry_id de la config entry ESPHome
+CONF_ESPHOME_SERVICE  = "esphome_service"    # nom du service ESPHome (ex: odace_send)
+DEFAULT_ESPHOME_SERVICE = "odace_send"       # service par défaut attendu dans le firmware
 
 # Modèles supportés
 MODEL_DCL = "dcl"

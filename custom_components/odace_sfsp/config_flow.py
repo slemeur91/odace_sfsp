@@ -1,17 +1,18 @@
-"""Config flow : sélection du mode d'envoi BLE (dongle HCI ou ESP32/MQTT).
+"""Config flow : sélection du mode d'envoi BLE.
 
 Étapes pour une nouvelle installation :
-  async_step_user        → Choix du mode (HCI ou ESP32/MQTT)
+  async_step_user        → Choix du mode (HCI / ESP32 MQTT / ESPHome API)
     ↓ HCI
   async_step_hci         → Sélection du dongle + clé Jeedom
-    ↓ ESP32
+    ↓ ESP32/MQTT
   async_step_mqtt_broker → Saisie du topic MQTT
   async_step_mqtt_mac    → Découverte automatique MAC ESP32 (8 s) ou saisie manuelle
+    ↓ ESPHome API
+  async_step_esphome     → Sélection du device ESPHome (dropdown) + nom du service custom
 
-Découverte automatique de la MAC ESP32 :
+Découverte automatique de la MAC ESP32 (mode MQTT) :
   L'ESP32 publie sa MAC Bluetooth sur ``odace_sfsp/mac`` à la connexion MQTT.
   Le config flow souscrit à ce topic et attend 8 secondes.
-  Si reçue → champ pré-rempli (modifiable). Si timeout → saisie manuelle.
 
 Rétrocompatibilité :
   Les installations existantes (sans CONF_SEND_MODE) continuent de fonctionner
@@ -28,7 +29,6 @@ from typing import Any, Dict
 import voluptuous as vol
 
 from homeassistant import config_entries
-from homeassistant.components import bluetooth
 from homeassistant.components import mqtt as ha_mqtt
 from homeassistant.const import CONF_MAC
 from homeassistant.data_entry_flow import FlowResult
@@ -36,6 +36,8 @@ from homeassistant.data_entry_flow import FlowResult
 from .sender import read_controller_mac
 from .const import (
     CONF_DEVICES,
+    CONF_ESPHOME_ENTRY_ID,
+    CONF_ESPHOME_SERVICE,
     CONF_HCI,
     CONF_JEEDOM_KEY,
     CONF_MODEL,
@@ -43,6 +45,7 @@ from .const import (
     CONF_NAME,
     CONF_SEND_MODE,
     CONF_UUID,
+    DEFAULT_ESPHOME_SERVICE,
     DEFAULT_HCI,
     DEFAULT_MQTT_MAC_TOPIC,
     DEFAULT_MQTT_TOPIC,
@@ -51,6 +54,7 @@ from .const import (
     FORCE_JEEDOM_KEY,
     KNOWN_DEVICES,
     MAC_DISCOVERY_TIMEOUT,
+    SEND_MODE_ESPHOME_API,
     SEND_MODE_HCI,
     SEND_MODE_MQTT,
     SUPPORTED_MODELS,
@@ -92,17 +96,6 @@ def _normalize_uuid(uuid_raw: str, fmt: str) -> str:
 # Helpers partagés
 # ---------------------------------------------------------------------------
 
-def _get_adapter_address_sync(adapter_name: str, details: Any) -> str:
-    """Extrait la MAC depuis un AdapterDetails HA — sans I/O bloquant."""
-    if hasattr(details, "address"):
-        address = details.address or ""
-    elif isinstance(details, dict):
-        address = details.get("address") or ""
-    else:
-        address = ""
-    return address.upper() if address and address != "00:00:00:00:00:00" else ""
-
-
 def _scan_sysfs_adapters() -> Dict[str, str]:
     """Énumère les adaptateurs HCI depuis sysfs (exécution synchrone via executor)."""
     import os
@@ -117,22 +110,25 @@ def _scan_sysfs_adapters() -> Dict[str, str]:
     return result
 
 
+def _list_esphome_entries(hass) -> Dict[str, str]:
+    """Retourne {entry_id: 'Titre (domain)'} pour toutes les config entries ESPHome.
+
+    Utilisé dans le config flow pour proposer un dropdown des devices ESPHome
+    disponibles, sans que l'utilisateur ait à saisir quoi que ce soit manuellement.
+    """
+    entries: Dict[str, str] = {}
+    for entry in hass.config_entries.async_entries("esphome"):
+        entries[entry.entry_id] = entry.title
+    return entries
+
+
 async def _list_hci_adapters(hass) -> Dict[str, str]:
-    """Retourne {adapter_name: 'name (MAC)'} pour tous les contrôleurs BLE."""
-    adapters: Dict[str, str] = {}
-    try:
-        for adapter_name, details in bluetooth.async_get_adapters(hass).items():
-            address = _get_adapter_address_sync(adapter_name, details)
-            if not address and adapter_name.startswith("hci"):
-                address = (
-                    await hass.async_add_executor_job(read_controller_mac, adapter_name)
-                    or "00:00:00:00:00:00"
-                )
-            adapters[adapter_name] = f"{adapter_name} ({address or '00:00:00:00:00:00'})"
-    except Exception as err:
-        _LOGGER.debug("Unable to list adapters: %s", err)
-    if not adapters:
-        adapters = await hass.async_add_executor_job(_scan_sysfs_adapters)
+    """Retourne {adapter_name: 'name (MAC)'} pour tous les contrôleurs BLE locaux.
+
+    Utilise sysfs (/sys/class/bluetooth/) pour énumérer les adaptateurs HCI
+    sans dépendre de l'API bluetooth de HA (dont l'interface a changé entre versions).
+    """
+    adapters = await hass.async_add_executor_job(_scan_sysfs_adapters)
     if not adapters:
         adapters = {DEFAULT_HCI: f"{DEFAULT_HCI} (00:00:00:00:00:00)"}
     return adapters
@@ -201,6 +197,8 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._send_mode = user_input[CONF_SEND_MODE]
             if self._send_mode == SEND_MODE_MQTT:
                 return await self.async_step_mqtt_broker()
+            if self._send_mode == SEND_MODE_ESPHOME_API:
+                return await self.async_step_esphome()
             return await self.async_step_hci()
 
         return self.async_show_form(
@@ -209,8 +207,9 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 {
                     vol.Required(CONF_SEND_MODE, default=SEND_MODE_HCI): vol.In(
                         {
-                            SEND_MODE_HCI:  "Dongle Bluetooth local (HAOS, Proxmox, USB)",
-                            SEND_MODE_MQTT: "ESP32 via MQTT (sans dongle USB sur HA)",
+                            SEND_MODE_HCI:         "Dongle Bluetooth local (HAOS, Proxmox, USB)",
+                            SEND_MODE_MQTT:        "ESP32 via MQTT (sans dongle USB sur HA)",
+                            SEND_MODE_ESPHOME_API: "ESP32 BLE Proxy via API native ESPHome",
                         }
                     )
                 }
@@ -233,15 +232,7 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             hci_name = user_input[CONF_HCI]
-            mac: str | None = None
-            try:
-                ha_adapters = bluetooth.async_get_adapters(self.hass)
-                if hci_name in ha_adapters:
-                    mac = _get_adapter_address_sync(hci_name, ha_adapters[hci_name]) or None
-            except Exception:
-                pass
-            if not mac:
-                mac = await self.hass.async_add_executor_job(read_controller_mac, hci_name)
+            mac = await self.hass.async_add_executor_job(read_controller_mac, hci_name)
             mac = mac or "00:00:00:00:00:00"
 
             await self.async_set_unique_id(f"odace_sfsp-{mac}")
@@ -355,6 +346,68 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             },
         )
 
+    # ------------------------------------------------------------------
+    # Branche ESPHome API
+    # ------------------------------------------------------------------
+    async def async_step_esphome(
+        self, user_input: Dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Sélection du device ESPHome + nom du service custom BLE.
+
+        Liste automatiquement toutes les intégrations ESPHome connues de HA
+        pour éviter toute saisie manuelle. L'utilisateur choisit son device
+        et confirme (ou modifie) le nom du service déclaré dans son firmware.
+        """
+        errors: Dict[str, str] = {}
+        esphome_entries = _list_esphome_entries(self.hass)
+
+        if not esphome_entries:
+            return self.async_abort(reason="no_esphome_device")
+
+        default_key = FORCE_JEEDOM_KEY if FORCE_JEEDOM_KEY else secrets.token_hex(12)
+
+        if user_input is not None:
+            entry_id = user_input[CONF_ESPHOME_ENTRY_ID]
+            service  = user_input.get(CONF_ESPHOME_SERVICE, DEFAULT_ESPHOME_SERVICE).strip()
+            if not service:
+                errors[CONF_ESPHOME_SERVICE] = "invalid_service"
+            else:
+                entry_title = esphome_entries.get(entry_id, entry_id)
+                await self.async_set_unique_id(f"odace_sfsp_esphome-{entry_id}")
+                self._abort_if_unique_id_configured()
+                return self.async_create_entry(
+                    title=f"Odace SFSP ({entry_title})",
+                    data={
+                        CONF_SEND_MODE:        SEND_MODE_ESPHOME_API,
+                        CONF_ESPHOME_ENTRY_ID: entry_id,
+                        CONF_ESPHOME_SERVICE:  service,
+                        CONF_JEEDOM_KEY:       user_input.get(CONF_JEEDOM_KEY) or default_key,
+                        CONF_DEVICES:          _import_known_devices(),
+                    },
+                )
+
+        # Pré-sélectionner le premier device si un seul est disponible
+        default_entry = next(iter(esphome_entries))
+
+        return self.async_show_form(
+            step_id="esphome",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_ESPHOME_ENTRY_ID, default=default_entry): vol.In(
+                        esphome_entries
+                    ),
+                    vol.Required(
+                        CONF_ESPHOME_SERVICE, default=DEFAULT_ESPHOME_SERVICE
+                    ): str,
+                    vol.Optional(CONF_JEEDOM_KEY, default=default_key): str,
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "service_name": DEFAULT_ESPHOME_SERVICE,
+            },
+        )
+
     @staticmethod
     def async_get_options_flow(
         entry: config_entries.ConfigEntry,
@@ -380,11 +433,12 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
         self, user_input: Dict[str, Any] | None = None
     ) -> FlowResult:
         send_mode = self.entry.data.get(CONF_SEND_MODE, SEND_MODE_HCI)
-        network_label = (
-            "Modifier la configuration ESP32/MQTT"
-            if send_mode == SEND_MODE_MQTT
-            else "Modifier le dongle Bluetooth"
-        )
+        if send_mode == SEND_MODE_MQTT:
+            network_label = "Modifier la configuration ESP32/MQTT"
+        elif send_mode == SEND_MODE_ESPHOME_API:
+            network_label = "Modifier la configuration ESPHome API"
+        else:
+            network_label = "Modifier le dongle Bluetooth"
         if user_input is not None:
             action = user_input["action"]
             if action == "network":
@@ -447,6 +501,38 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                     {
                         vol.Required(CONF_MAC, default=current_mac): str,
                         vol.Required(CONF_MQTT_TOPIC, default=current_topic): str,
+                    }
+                ),
+                errors=errors,
+            )
+
+        elif send_mode == SEND_MODE_ESPHOME_API:
+            esphome_entries = _list_esphome_entries(self.hass)
+            if not esphome_entries:
+                return self.async_abort(reason="no_esphome_device")
+            current_entry_id = self.entry.data.get(CONF_ESPHOME_ENTRY_ID, "")
+            current_service  = self.entry.data.get(CONF_ESPHOME_SERVICE, DEFAULT_ESPHOME_SERVICE)
+            if user_input is not None:
+                service = user_input.get(CONF_ESPHOME_SERVICE, "").strip()
+                if not service:
+                    errors[CONF_ESPHOME_SERVICE] = "invalid_service"
+                else:
+                    self.hass.config_entries.async_update_entry(
+                        self.entry,
+                        data={
+                            **self.entry.data,
+                            CONF_ESPHOME_ENTRY_ID: user_input[CONF_ESPHOME_ENTRY_ID],
+                            CONF_ESPHOME_SERVICE:  service,
+                        },
+                    )
+                    return self.async_create_entry(title="", data={})
+            default_entry = current_entry_id if current_entry_id in esphome_entries else next(iter(esphome_entries))
+            return self.async_show_form(
+                step_id="network",
+                data_schema=vol.Schema(
+                    {
+                        vol.Required(CONF_ESPHOME_ENTRY_ID, default=default_entry): vol.In(esphome_entries),
+                        vol.Required(CONF_ESPHOME_SERVICE, default=current_service): str,
                     }
                 ),
                 errors=errors,

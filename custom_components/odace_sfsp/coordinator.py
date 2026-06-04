@@ -30,20 +30,25 @@ from homeassistant.helpers.storage import Store
 from .parser import parse_manufacturer_data
 from .sender import (
     async_send as hci_send,
+    async_send_esphome_api,
     async_send_mqtt,
     craft_payload,
     hci_index_from_name,
 )
 from .const import (
     CONF_DEVICES,
+    CONF_ESPHOME_ENTRY_ID,
+    CONF_ESPHOME_SERVICE,
     CONF_HCI,
     CONF_JEEDOM_KEY,
     CONF_MAC,
     CONF_MQTT_TOPIC,
     CONF_SEND_MODE,
+    DEFAULT_ESPHOME_SERVICE,
     DEFAULT_MQTT_TOPIC,
     DOMAIN,
     MANUFACTURER_ID,
+    SEND_MODE_ESPHOME_API,
     SEND_MODE_HCI,
     SEND_MODE_MQTT,
     SIGNAL_DEVICES_CHANGED,
@@ -84,6 +89,10 @@ class OdaceSFSPCoordinator:
         # Mode ESP32/MQTT
         self.mqtt_topic: str = entry.data.get(CONF_MQTT_TOPIC, DEFAULT_MQTT_TOPIC)
 
+        # Mode ESPHome API
+        self.esphome_entry_id: str = entry.data.get(CONF_ESPHOME_ENTRY_ID, "")
+        self.esphome_service: str  = entry.data.get(CONF_ESPHOME_SERVICE, DEFAULT_ESPHOME_SERVICE)
+
         self.learn_mode: bool = False
         self._learn_expires: float = 0
         self._unsub_bt = None
@@ -109,6 +118,11 @@ class OdaceSFSPCoordinator:
             _LOGGER.info(
                 "Odace SFSP [ESP32/MQTT] — MAC ESP32 %s, topic %s — %d devices",
                 self.dongle_mac, self.mqtt_topic, len(self.devices),
+            )
+        elif self.send_mode == SEND_MODE_ESPHOME_API:
+            _LOGGER.info(
+                "Odace SFSP [ESPHome API] — entry_id=%s service=%s — %d devices",
+                self.esphome_entry_id, self.esphome_service, len(self.devices),
             )
         else:
             _LOGGER.info(
@@ -242,6 +256,10 @@ class OdaceSFSPCoordinator:
         """Envoie le payload via le mode configuré."""
         if self.send_mode == SEND_MODE_MQTT:
             await async_send_mqtt(self.hass, self.mqtt_topic, payload)
+        elif self.send_mode == SEND_MODE_ESPHOME_API:
+            await async_send_esphome_api(
+                self.hass, self.esphome_entry_id, self.esphome_service, payload
+            )
         else:
             await hci_send(self.hci_index, payload)
 

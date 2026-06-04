@@ -232,6 +232,58 @@ async def async_send_mqtt(hass, topic: str, payload: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Mode ESPHome API — envoi via service natif ESPHome
+# ---------------------------------------------------------------------------
+
+async def async_send_esphome_api(hass, entry_id: str, service_name: str, payload: str) -> bool:
+    """Envoie la trame BLE via un service custom déclaré dans le firmware ESPHome.
+
+    Le device ESPHome doit exposer un service ``service_name`` (ex: ``odace_send``)
+    avec une variable ``payload`` (string).  L'appel HA est :
+      domain  = "esphome"
+      service = "<device_name>_<service_name>"
+      data    = {"payload": "<hex>"}
+
+    ``entry_id`` est l'entry_id de la config entry ESPHome dans HA.
+    Le nom du device (slug) est déduit du titre de cette config entry.
+    """
+    if not validate_payload(payload):
+        _LOGGER.warning("Payload invalide, envoi ESPHome API annulé : %s", payload)
+        return False
+
+    payload_clean = payload.replace(" ", "").upper()
+
+    try:
+        entry = hass.config_entries.async_get_entry(entry_id)
+        if entry is None:
+            _LOGGER.error(
+                "Config entry ESPHome introuvable (entry_id=%s)", entry_id
+            )
+            return False
+
+        # Le service HA est enregistré sous le nom "{device_slug}_{service}"
+        # où device_slug = titre de l'entry en minuscules avec espaces → underscores
+        device_slug = entry.title.lower().replace(" ", "_").replace("-", "_")
+        ha_service = f"{device_slug}_{service_name}"
+
+        await hass.services.async_call(
+            "esphome",
+            ha_service,
+            {"payload": payload_clean},
+            blocking=False,
+        )
+        _LOGGER.info(
+            "Send to BLE [ESPHome API %s → esphome.%s]: %s",
+            entry.title, ha_service, payload_clean,
+        )
+        return True
+
+    except Exception as err:
+        _LOGGER.error("Erreur lors de l'appel ESPHome API : %s", err)
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Utilitaires HCI
 # ---------------------------------------------------------------------------
 
