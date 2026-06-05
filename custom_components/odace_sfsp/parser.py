@@ -93,6 +93,11 @@ def parse_trame(trame: str, mac: str) -> Optional[Dict[str, Any]]:
             string = _parse_plug(trame, cf, uuid, string, result)
         elif dtype == "9144":
             string = _parse_dimmer(trame, cf, uuid, string, result)
+        elif dtype == "a244":
+            # Trame émise par HA (type gateway/contrôleur) captée en retour par
+            # le bluetooth_proxy ESPHome — boucle de feedback normale, ignorer
+            # silencieusement.
+            return None
         else:
             _LOGGER.debug("Unknown type %s", dtype)
             return None
