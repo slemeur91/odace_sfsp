@@ -266,6 +266,24 @@ async def async_send_esphome_api(hass, entry_id: str, service_name: str, payload
         device_slug = entry.title.lower().replace(" ", "_").replace("-", "_")
         ha_service = f"{device_slug}_{service_name}"
 
+        # Vérification préalable : le service existe-t-il dans le registre HA ?
+        if not hass.services.has_service("esphome", ha_service):
+            # Lister les services ESPHome disponibles pour faciliter le diagnostic
+            available = sorted(
+                s for s in hass.services.async_services().get("esphome", {})
+            )
+            _LOGGER.error(
+                "Service ESPHome introuvable : esphome.%s\n"
+                "  → Le firmware de '%s' expose-t-il bien le service '%s' ?\n"
+                "  → Vérifier que le build ESPHome a réussi et que le firmware a été flashé.\n"
+                "  → Services ESPHome disponibles : %s",
+                ha_service,
+                entry.title,
+                service_name,
+                available or ["(aucun)"],
+            )
+            return False
+
         await hass.services.async_call(
             "esphome",
             ha_service,

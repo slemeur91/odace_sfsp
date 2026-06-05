@@ -111,7 +111,7 @@ def _scan_sysfs_adapters() -> Dict[str, str]:
 
 
 def _list_esphome_entries(hass) -> Dict[str, str]:
-    """Retourne {entry_id: 'Titre (domain)'} pour toutes les config entries ESPHome.
+    """Retourne {entry_id: 'Titre'} pour toutes les config entries ESPHome.
 
     Utilisé dans le config flow pour proposer un dropdown des devices ESPHome
     disponibles, sans que l'utilisateur ait à saisir quoi que ce soit manuellement.
@@ -120,6 +120,27 @@ def _list_esphome_entries(hass) -> Dict[str, str]:
     for entry in hass.config_entries.async_entries("esphome"):
         entries[entry.entry_id] = entry.title
     return entries
+
+
+def _list_esphome_services(hass, entry_id: str) -> Dict[str, str]:
+    """Retourne {service_name: label} des services custom exposés par un device ESPHome.
+
+    Filtre les services HA du domaine ``esphome`` pour ne garder que ceux
+    appartenant au device dont l'entry_id est fourni.
+    Si le firmware n'a pas encore été flashé avec les services, retourne {}.
+    """
+    entry = hass.config_entries.async_get_entry(entry_id)
+    if entry is None:
+        return {}
+    device_slug = entry.title.lower().replace(" ", "_").replace("-", "_")
+    prefix = f"{device_slug}_"
+    services: Dict[str, str] = {}
+    for svc_name in hass.services.async_services().get("esphome", {}):
+        if svc_name.startswith(prefix):
+            # Nom sans le préfixe device, ex : "smart_doorbell_odace_send" → "odace_send"
+            short = svc_name[len(prefix):]
+            services[short] = short
+    return services
 
 
 async def _list_hci_adapters(hass) -> Dict[str, str]:
@@ -389,22 +410,40 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # Pré-sélectionner le premier device si un seul est disponible
         default_entry = next(iter(esphome_entries))
 
+        # Services disponibles pour ce device (vide si firmware pas encore à jour)
+        available_services = _list_esphome_services(self.hass, default_entry)
+
+        schema_fields: Dict[Any, Any] = {
+            vol.Required(CONF_ESPHOME_ENTRY_ID, default=default_entry): vol.In(
+                esphome_entries
+            ),
+        }
+
+        if available_services:
+            # Firmware déjà flashé avec des services → dropdown
+            default_svc = (
+                DEFAULT_ESPHOME_SERVICE
+                if DEFAULT_ESPHOME_SERVICE in available_services
+                else next(iter(available_services))
+            )
+            schema_fields[
+                vol.Required(CONF_ESPHOME_SERVICE, default=default_svc)
+            ] = vol.In(available_services)
+        else:
+            # Firmware pas encore à jour → champ libre avec valeur par défaut
+            schema_fields[
+                vol.Required(CONF_ESPHOME_SERVICE, default=DEFAULT_ESPHOME_SERVICE)
+            ] = str
+
+        schema_fields[vol.Optional(CONF_JEEDOM_KEY, default=default_key)] = str
+
         return self.async_show_form(
             step_id="esphome",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_ESPHOME_ENTRY_ID, default=default_entry): vol.In(
-                        esphome_entries
-                    ),
-                    vol.Required(
-                        CONF_ESPHOME_SERVICE, default=DEFAULT_ESPHOME_SERVICE
-                    ): str,
-                    vol.Optional(CONF_JEEDOM_KEY, default=default_key): str,
-                }
-            ),
+            data_schema=vol.Schema(schema_fields),
             errors=errors,
             description_placeholders={
                 "service_name": DEFAULT_ESPHOME_SERVICE,
+                "services_found": str(len(available_services)),
             },
         )
 
@@ -527,14 +566,20 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                     )
                     return self.async_create_entry(title="", data={})
             default_entry = current_entry_id if current_entry_id in esphome_entries else next(iter(esphome_entries))
+            available_services = _list_esphome_services(self.hass, default_entry)
+
+            network_schema: Dict[Any, Any] = {
+                vol.Required(CONF_ESPHOME_ENTRY_ID, default=default_entry): vol.In(esphome_entries),
+            }
+            if available_services:
+                default_svc = current_service if current_service in available_services else next(iter(available_services))
+                network_schema[vol.Required(CONF_ESPHOME_SERVICE, default=default_svc)] = vol.In(available_services)
+            else:
+                network_schema[vol.Required(CONF_ESPHOME_SERVICE, default=current_service)] = str
+
             return self.async_show_form(
                 step_id="network",
-                data_schema=vol.Schema(
-                    {
-                        vol.Required(CONF_ESPHOME_ENTRY_ID, default=default_entry): vol.In(esphome_entries),
-                        vol.Required(CONF_ESPHOME_SERVICE, default=current_service): str,
-                    }
-                ),
+                data_schema=vol.Schema(network_schema),
                 errors=errors,
             )
 
