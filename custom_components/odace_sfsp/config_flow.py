@@ -113,9 +113,12 @@ def _scan_sysfs_adapters() -> Dict[str, str]:
 def _guess_esphome_bt_mac(hass, entry_id: str) -> str:
     """Tente de retrouver la MAC Bluetooth de l'ESP32 par plusieurs méthodes.
 
-    Méthode 1 — aioesphomeapi DeviceInfo.bluetooth_mac_address :
-      Disponible si l'ESPHome est connecté et que sa version d'aioesphomeapi
-      expose ce champ (ajouté pour les bluetooth_proxy).
+    Méthode 1a — config_entry.runtime_data (HA 2024+) :
+      Depuis HA 2024.x, les intégrations stockent leurs données dans
+      config_entry.runtime_data plutôt que dans hass.data[domain][entry_id].
+
+    Méthode 1b — hass.data["esphome"][entry_id] (HA <2024) :
+      Ancienne localisation de RuntimeEntryData pour compatibilité.
 
     Méthode 2 — Bluetooth manager de HA :
       Les proxies ESPHome s'enregistrent comme scanners BLE dans HA.
@@ -126,27 +129,60 @@ def _guess_esphome_bt_mac(hass, entry_id: str) -> str:
 
     Retourne la MAC en majuscules (ex: "AA:BB:CC:DD:EE:FF") ou "" si introuvable.
     """
-    # --- Méthode 1 : RuntimeEntryData ESPHome → device_info.bluetooth_mac_address ---
+    # --- Méthode 1a : config_entry.runtime_data (HA 2024+) ---
     try:
-        entry_data = hass.data.get("esphome", {}).get(entry_id)
-        if entry_data is not None:
-            device_info = getattr(entry_data, "device_info", None)
-            if device_info is not None:
-                bt_mac = getattr(device_info, "bluetooth_mac_address", None) or ""
-                if bt_mac and bt_mac not in ("", "00:00:00:00:00:00"):
-                    _LOGGER.debug("ESPHome BT MAC (méthode 1 RuntimeEntryData) : %s", bt_mac)
-                    return bt_mac.upper()
+        esphome_entry = hass.config_entries.async_get_entry(entry_id)
+        if esphome_entry is not None:
+            runtime_data = getattr(esphome_entry, "runtime_data", None)
+            if runtime_data is not None:
+                device_info = getattr(runtime_data, "device_info", None)
+                if device_info is not None:
+                    bt_mac = getattr(device_info, "bluetooth_mac_address", None) or ""
+                    if bt_mac and bt_mac not in ("", "00:00:00:00:00:00"):
+                        _LOGGER.debug("ESPHome BT MAC (méthode 1a runtime_data) : %s", bt_mac)
+                        return bt_mac.upper()
+                    _LOGGER.debug(
+                        "Méthode 1a : device_info trouvé mais bluetooth_mac_address absent ou nul "
+                        "(champs : %s)",
+                        [f for f in dir(device_info) if not f.startswith("_")],
+                    )
+                else:
+                    _LOGGER.debug(
+                        "Méthode 1a : runtime_data=%s mais device_info absent",
+                        type(runtime_data).__name__,
+                    )
+            else:
+                _LOGGER.debug("Méthode 1a : pas de runtime_data sur la config entry ESPHome")
+        else:
+            _LOGGER.debug("Méthode 1a : config entry %s introuvable", entry_id)
+    except Exception as err:
+        _LOGGER.debug("Méthode 1a exception : %s", err)
+
+    # --- Méthode 1b : hass.data["esphome"][entry_id] (HA <2024) ---
+    try:
+        esphome_domain_data = hass.data.get("esphome")
+        if isinstance(esphome_domain_data, dict):
+            entry_data = esphome_domain_data.get(entry_id)
+            if entry_data is not None:
+                device_info = getattr(entry_data, "device_info", None)
+                if device_info is not None:
+                    bt_mac = getattr(device_info, "bluetooth_mac_address", None) or ""
+                    if bt_mac and bt_mac not in ("", "00:00:00:00:00:00"):
+                        _LOGGER.debug("ESPHome BT MAC (méthode 1b hass.data) : %s", bt_mac)
+                        return bt_mac.upper()
                 _LOGGER.debug(
-                    "Méthode 1 : device_info trouvé mais bluetooth_mac_address absent ou nul "
-                    "(champs disponibles : %s)",
-                    [f for f in dir(device_info) if not f.startswith("_")],
+                    "Méthode 1b : entry_data trouvé (type=%s) mais BT MAC absent",
+                    type(entry_data).__name__,
                 )
             else:
-                _LOGGER.debug("Méthode 1 : entry_data trouvé mais device_info absent")
+                _LOGGER.debug("Méthode 1b : entry_id %s absent de hass.data['esphome']", entry_id)
         else:
-            _LOGGER.debug("Méthode 1 : entry_id %s absent de hass.data['esphome']", entry_id)
+            _LOGGER.debug(
+                "Méthode 1b : hass.data['esphome'] n'est pas un dict (type=%s)",
+                type(esphome_domain_data).__name__ if esphome_domain_data is not None else "absent",
+            )
     except Exception as err:
-        _LOGGER.debug("Méthode 1 exception : %s", err)
+        _LOGGER.debug("Méthode 1b exception : %s", err)
 
     # --- Méthode 2 : bluetooth manager → scanner source ---
     try:
@@ -502,13 +538,18 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 entry_title = esphome_entries.get(entry_id, entry_id)
                 await self.async_set_unique_id(f"odace_sfsp_esphome-{entry_id}")
                 self._abort_if_unique_id_configured()
+                if not esp32_mac:
+                    _LOGGER.warning(
+                        "MAC BT ESP32 non renseignée — le pairing sera impossible. "
+                        "Consulter les logs ESPHome : 'Bluetooth controller initialized, address XX:XX:XX:XX:XX:XX'"
+                    )
                 return self.async_create_entry(
                     title=f"Odace SFSP ({entry_title})",
                     data={
                         CONF_SEND_MODE:        SEND_MODE_ESPHOME_API,
                         CONF_ESPHOME_ENTRY_ID: entry_id,
                         CONF_ESPHOME_SERVICE:  service,
-                        CONF_MAC:              esp32_mac or "00:00:00:00:00:00",
+                        CONF_MAC:              esp32_mac or "",
                         CONF_JEEDOM_KEY:       user_input.get(CONF_JEEDOM_KEY) or default_key,
                         CONF_DEVICES:          _import_known_devices(),
                     },
@@ -537,9 +578,9 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_ESPHOME_SERVICE, default=DEFAULT_ESPHOME_SERVICE)
             ] = str
 
-        # MAC BT de l'ESP32 — pré-remplie si détectée automatiquement
+        # MAC BT de l'ESP32 — pré-remplie si détectée automatiquement, vide sinon
         schema_fields[
-            vol.Required(CONF_MAC, default=guessed_mac or "AA:BB:CC:DD:EE:FF")
+            vol.Optional(CONF_MAC, default=guessed_mac)
         ] = str
 
         schema_fields[vol.Optional(CONF_JEEDOM_KEY, default=default_key)] = str
