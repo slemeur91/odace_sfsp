@@ -121,8 +121,8 @@ class OdaceSFSPCoordinator:
             )
         elif self.send_mode == SEND_MODE_ESPHOME_API:
             _LOGGER.info(
-                "Odace SFSP [ESPHome API] — entry_id=%s service=%s — %d devices",
-                self.esphome_entry_id, self.esphome_service, len(self.devices),
+                "Odace SFSP [ESPHome API] — entry_id=%s service=%s MAC BT=%s — %d devices",
+                self.esphome_entry_id, self.esphome_service, self.dongle_mac, len(self.devices),
             )
         else:
             _LOGGER.info(

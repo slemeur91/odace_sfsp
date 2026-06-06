@@ -111,17 +111,97 @@ def _scan_sysfs_adapters() -> Dict[str, str]:
 
 
 def _guess_esphome_bt_mac(hass, entry_id: str) -> str:
-    """Tente de retrouver la MAC Bluetooth de l'ESP32 depuis le registre HA.
+    """Tente de retrouver la MAC Bluetooth de l'ESP32 par plusieurs méthodes.
 
-    L'intégration ESPHome enregistre parfois une connexion de type Bluetooth
-    pour les devices avec bluetooth_proxy. Retourne la MAC si trouvée, sinon "".
+    Méthode 1 — aioesphomeapi DeviceInfo.bluetooth_mac_address :
+      Disponible si l'ESPHome est connecté et que sa version d'aioesphomeapi
+      expose ce champ (ajouté pour les bluetooth_proxy).
+
+    Méthode 2 — Bluetooth manager de HA :
+      Les proxies ESPHome s'enregistrent comme scanners BLE dans HA.
+      Leur adresse source est la MAC BT de l'ESP32.
+
+    Méthode 3 — device registry CONNECTION_BLUETOOTH :
+      Certaines versions HA/ESPHome enregistrent aussi une connexion BT.
+
+    Retourne la MAC en majuscules (ex: "AA:BB:CC:DD:EE:FF") ou "" si introuvable.
     """
-    from homeassistant.helpers import device_registry as dr
-    dev_reg = dr.async_get(hass)
-    for device in dr.async_entries_for_config_entry(dev_reg, entry_id):
-        for conn_type, conn_id in device.connections:
-            if conn_type == dr.CONNECTION_BLUETOOTH:
-                return conn_id.upper()
+    # --- Méthode 1 : RuntimeEntryData ESPHome → device_info.bluetooth_mac_address ---
+    try:
+        entry_data = hass.data.get("esphome", {}).get(entry_id)
+        if entry_data is not None:
+            device_info = getattr(entry_data, "device_info", None)
+            if device_info is not None:
+                bt_mac = getattr(device_info, "bluetooth_mac_address", None) or ""
+                if bt_mac and bt_mac not in ("", "00:00:00:00:00:00"):
+                    _LOGGER.debug("ESPHome BT MAC (méthode 1 RuntimeEntryData) : %s", bt_mac)
+                    return bt_mac.upper()
+                _LOGGER.debug(
+                    "Méthode 1 : device_info trouvé mais bluetooth_mac_address absent ou nul "
+                    "(champs disponibles : %s)",
+                    [f for f in dir(device_info) if not f.startswith("_")],
+                )
+            else:
+                _LOGGER.debug("Méthode 1 : entry_data trouvé mais device_info absent")
+        else:
+            _LOGGER.debug("Méthode 1 : entry_id %s absent de hass.data['esphome']", entry_id)
+    except Exception as err:
+        _LOGGER.debug("Méthode 1 exception : %s", err)
+
+    # --- Méthode 2 : bluetooth manager → scanner source ---
+    try:
+        esphome_entry = hass.config_entries.async_get_entry(entry_id)
+        if esphome_entry is not None:
+            device_slug = (
+                esphome_entry.title.lower().replace(" ", "_").replace("-", "_")
+            )
+            bt_manager = hass.data.get("bluetooth")
+            if bt_manager is not None:
+                # _adapters : {source_mac: AdapterDetails}
+                for source, adapter in getattr(bt_manager, "_adapters", {}).items():
+                    adapter_name = (getattr(adapter, "name", "") or "").lower()
+                    if device_slug in adapter_name.replace(" ", "_").replace("-", "_"):
+                        mac = source.upper()
+                        if mac != "00:00:00:00:00:00":
+                            _LOGGER.debug("ESPHome BT MAC (méthode 2 adapter) : %s", mac)
+                            return mac
+                # Fallback : scanners enregistrés
+                for scanner in getattr(bt_manager, "_scanners", {}).values():
+                    scanner_name = (getattr(scanner, "name", "") or "").lower()
+                    if device_slug in scanner_name.replace(" ", "_").replace("-", "_"):
+                        src = getattr(scanner, "source", "") or ""
+                        if src and src.upper() != "00:00:00:00:00:00":
+                            _LOGGER.debug("ESPHome BT MAC (méthode 2 scanner) : %s", src)
+                            return src.upper()
+                _LOGGER.debug(
+                    "Méthode 2 : bt_manager trouvé mais aucun adapter/scanner correspondant à '%s'. "
+                    "Adapters : %s — Scanners : %s",
+                    device_slug,
+                    list(getattr(bt_manager, "_adapters", {}).keys()),
+                    [getattr(s, "source", "?") for s in getattr(bt_manager, "_scanners", {}).values()],
+                )
+            else:
+                _LOGGER.debug("Méthode 2 : hass.data['bluetooth'] absent")
+    except Exception as err:
+        _LOGGER.debug("Méthode 2 exception : %s", err)
+
+    # --- Méthode 3 : device registry CONNECTION_BLUETOOTH ---
+    try:
+        from homeassistant.helpers import device_registry as dr
+        dev_reg = dr.async_get(hass)
+        for device in dr.async_entries_for_config_entry(dev_reg, entry_id):
+            for conn_type, conn_id in device.connections:
+                if conn_type == dr.CONNECTION_BLUETOOTH:
+                    _LOGGER.debug("ESPHome BT MAC (méthode 3 device registry) : %s", conn_id)
+                    return conn_id.upper()
+        _LOGGER.debug("Méthode 3 : aucune CONNECTION_BLUETOOTH dans le device registry pour %s", entry_id)
+    except Exception as err:
+        _LOGGER.debug("Méthode 3 exception : %s", err)
+
+    _LOGGER.debug(
+        "MAC BT ESP32 introuvable automatiquement — saisie manuelle requise. "
+        "Consulter les logs ESPHome au démarrage : 'Bluetooth controller initialized, address XX:XX:XX:XX:XX:XX'"
+    )
     return ""
 
 
@@ -578,22 +658,8 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                 return self.async_abort(reason="no_esphome_device")
             current_entry_id = self.entry.data.get(CONF_ESPHOME_ENTRY_ID, "")
             current_service  = self.entry.data.get(CONF_ESPHOME_SERVICE, DEFAULT_ESPHOME_SERVICE)
-            if user_input is not None:
-                service = user_input.get(CONF_ESPHOME_SERVICE, "").strip()
-                if not service:
-                    errors[CONF_ESPHOME_SERVICE] = "invalid_service"
-                else:
-                    self.hass.config_entries.async_update_entry(
-                        self.entry,
-                        data={
-                            **self.entry.data,
-                            CONF_ESPHOME_ENTRY_ID: user_input[CONF_ESPHOME_ENTRY_ID],
-                            CONF_ESPHOME_SERVICE:  service,
-                        },
-                    )
-                    return self.async_create_entry(title="", data={})
-            current_mac  = self.entry.data.get(CONF_MAC, "")
-            default_entry = current_entry_id if current_entry_id in esphome_entries else next(iter(esphome_entries))
+            current_mac      = self.entry.data.get(CONF_MAC, "")
+            default_entry    = current_entry_id if current_entry_id in esphome_entries else next(iter(esphome_entries))
             available_services = _list_esphome_services(self.hass, default_entry)
 
             if user_input is not None:
