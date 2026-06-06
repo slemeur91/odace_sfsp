@@ -137,12 +137,29 @@ def _guess_esphome_bt_mac(hass, entry_id: str) -> str:
             if runtime_data is not None:
                 device_info = getattr(runtime_data, "device_info", None)
                 if device_info is not None:
+                    # 1. Champ dédié bluetooth_mac_address (aioesphomeapi récent)
                     bt_mac = getattr(device_info, "bluetooth_mac_address", None) or ""
                     if bt_mac and bt_mac not in ("", "00:00:00:00:00:00"):
-                        _LOGGER.debug("ESPHome BT MAC (méthode 1a runtime_data) : %s", bt_mac)
+                        _LOGGER.debug("ESPHome BT MAC (méthode 1a bluetooth_mac_address) : %s", bt_mac)
                         return bt_mac.upper()
+                    # 2. Dériver depuis mac_address (WiFi) : BT MAC = WiFi MAC + 2 (ESP32 allocation)
+                    wifi_mac = getattr(device_info, "mac_address", None) or ""
+                    if wifi_mac and wifi_mac not in ("", "00:00:00:00:00:00"):
+                        try:
+                            mac_int = int(wifi_mac.replace(":", ""), 16)
+                            bt_int  = mac_int + 2
+                            bt_mac  = ":".join(
+                                f"{(bt_int >> (8 * i)) & 0xFF:02X}" for i in range(5, -1, -1)
+                            )
+                            _LOGGER.debug(
+                                "ESPHome BT MAC (méthode 1a dérivée WiFi MAC %s +2) : %s",
+                                wifi_mac, bt_mac,
+                            )
+                            return bt_mac
+                        except Exception as derive_err:
+                            _LOGGER.debug("Méthode 1a dérivation exception : %s", derive_err)
                     _LOGGER.debug(
-                        "Méthode 1a : device_info trouvé mais bluetooth_mac_address absent ou nul "
+                        "Méthode 1a : device_info trouvé mais bluetooth_mac_address et mac_address absents "
                         "(champs : %s)",
                         [f for f in dir(device_info) if not f.startswith("_")],
                     )
