@@ -261,28 +261,43 @@ async def async_send_esphome_api(hass, entry_id: str, service_name: str, payload
             )
             return False
 
-        # Le service HA est enregistré sous le nom "{device_slug}_{service}"
-        # où device_slug = titre de l'entry en minuscules avec espaces → underscores
+        # Résolution du service ESPHome :
+        # 1. Essai avec le slug calculé depuis le titre de la config entry
+        # 2. Si absent, recherche parmi tous les services esphome.* pour trouver
+        #    celui qui correspond à l'action demandée — robuste face aux variations
+        #    de slugification entre versions HA/ESPHome.
+        all_esphome_svcs = hass.services.async_services().get("esphome", {})
+
         device_slug = entry.title.lower().replace(" ", "_").replace("-", "_")
         ha_service = f"{device_slug}_{service_name}"
 
-        # Vérification préalable : le service existe-t-il dans le registre HA ?
-        if not hass.services.has_service("esphome", ha_service):
-            # Lister les services ESPHome disponibles pour faciliter le diagnostic
-            available = sorted(
-                s for s in hass.services.async_services().get("esphome", {})
-            )
-            _LOGGER.error(
-                "Service ESPHome introuvable : esphome.%s\n"
-                "  → Le firmware de '%s' expose-t-il bien le service '%s' ?\n"
-                "  → Vérifier que le build ESPHome a réussi et que le firmware a été flashé.\n"
-                "  → Services ESPHome disponibles : %s",
-                ha_service,
-                entry.title,
-                service_name,
-                available or ["(aucun)"],
-            )
-            return False
+        if ha_service not in all_esphome_svcs:
+            # Recherche large : service_name exact ou suffixe _{service_name}
+            candidates = [
+                s for s in all_esphome_svcs
+                if s == service_name or s.endswith(f"_{service_name}")
+            ]
+            if len(candidates) == 1:
+                ha_service = candidates[0]
+                _LOGGER.debug(
+                    "Service ESPHome trouvé par recherche : esphome.%s", ha_service
+                )
+            elif len(candidates) > 1:
+                # Préférer celui qui commence par le slug du device
+                preferred = [c for c in candidates if c.startswith(f"{device_slug}_")]
+                ha_service = preferred[0] if preferred else candidates[0]
+                _LOGGER.debug(
+                    "Plusieurs services ESPHome candidats, sélection : esphome.%s", ha_service
+                )
+            else:
+                _LOGGER.error(
+                    "Service ESPHome '%s' introuvable pour '%s'. "
+                    "Services ESPHome disponibles : %s",
+                    service_name,
+                    entry.title,
+                    sorted(all_esphome_svcs.keys()) or ["(aucun — firmware pas encore flashé ?)"],
+                )
+                return False
 
         await hass.services.async_call(
             "esphome",
@@ -291,8 +306,7 @@ async def async_send_esphome_api(hass, entry_id: str, service_name: str, payload
             blocking=False,
         )
         _LOGGER.info(
-            "Send to BLE [ESPHome API %s → esphome.%s]: %s",
-            entry.title, ha_service, payload_clean,
+            "Send to BLE [ESPHome API esphome.%s]: %s", ha_service, payload_clean,
         )
         return True
 

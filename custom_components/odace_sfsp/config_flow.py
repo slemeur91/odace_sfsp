@@ -110,6 +110,21 @@ def _scan_sysfs_adapters() -> Dict[str, str]:
     return result
 
 
+def _guess_esphome_bt_mac(hass, entry_id: str) -> str:
+    """Tente de retrouver la MAC Bluetooth de l'ESP32 depuis le registre HA.
+
+    L'intégration ESPHome enregistre parfois une connexion de type Bluetooth
+    pour les devices avec bluetooth_proxy. Retourne la MAC si trouvée, sinon "".
+    """
+    from homeassistant.helpers import device_registry as dr
+    dev_reg = dr.async_get(hass)
+    for device in dr.async_entries_for_config_entry(dev_reg, entry_id):
+        for conn_type, conn_id in device.connections:
+            if conn_type == dr.CONNECTION_BLUETOOTH:
+                return conn_id.upper()
+    return ""
+
+
 def _list_esphome_entries(hass) -> Dict[str, str]:
     """Retourne {entry_id: 'Titre'} pour toutes les config entries ESPHome.
 
@@ -387,12 +402,23 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         default_key = FORCE_JEEDOM_KEY if FORCE_JEEDOM_KEY else secrets.token_hex(12)
 
+        # Pré-sélectionner le premier device si un seul est disponible
+        default_entry = next(iter(esphome_entries))
+
+        # Tentative de détection automatique de la MAC BT de l'ESP32
+        guessed_mac = _guess_esphome_bt_mac(self.hass, default_entry)
+
         if user_input is not None:
-            entry_id = user_input[CONF_ESPHOME_ENTRY_ID]
-            service  = user_input.get(CONF_ESPHOME_SERVICE, DEFAULT_ESPHOME_SERVICE).strip()
+            entry_id  = user_input[CONF_ESPHOME_ENTRY_ID]
+            service   = user_input.get(CONF_ESPHOME_SERVICE, DEFAULT_ESPHOME_SERVICE).strip()
+            esp32_mac = user_input.get(CONF_MAC, "").strip().upper()
+
             if not service:
                 errors[CONF_ESPHOME_SERVICE] = "invalid_service"
-            else:
+            if esp32_mac and not _is_valid_mac(esp32_mac):
+                errors[CONF_MAC] = "invalid_mac"
+
+            if not errors:
                 entry_title = esphome_entries.get(entry_id, entry_id)
                 await self.async_set_unique_id(f"odace_sfsp_esphome-{entry_id}")
                 self._abort_if_unique_id_configured()
@@ -402,13 +428,11 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_SEND_MODE:        SEND_MODE_ESPHOME_API,
                         CONF_ESPHOME_ENTRY_ID: entry_id,
                         CONF_ESPHOME_SERVICE:  service,
+                        CONF_MAC:              esp32_mac or "00:00:00:00:00:00",
                         CONF_JEEDOM_KEY:       user_input.get(CONF_JEEDOM_KEY) or default_key,
                         CONF_DEVICES:          _import_known_devices(),
                     },
                 )
-
-        # Pré-sélectionner le premier device si un seul est disponible
-        default_entry = next(iter(esphome_entries))
 
         # Services disponibles pour ce device (vide si firmware pas encore à jour)
         available_services = _list_esphome_services(self.hass, default_entry)
@@ -420,7 +444,6 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         }
 
         if available_services:
-            # Firmware déjà flashé avec des services → dropdown
             default_svc = (
                 DEFAULT_ESPHOME_SERVICE
                 if DEFAULT_ESPHOME_SERVICE in available_services
@@ -430,10 +453,14 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_ESPHOME_SERVICE, default=default_svc)
             ] = vol.In(available_services)
         else:
-            # Firmware pas encore à jour → champ libre avec valeur par défaut
             schema_fields[
                 vol.Required(CONF_ESPHOME_SERVICE, default=DEFAULT_ESPHOME_SERVICE)
             ] = str
+
+        # MAC BT de l'ESP32 — pré-remplie si détectée automatiquement
+        schema_fields[
+            vol.Required(CONF_MAC, default=guessed_mac or "AA:BB:CC:DD:EE:FF")
+        ] = str
 
         schema_fields[vol.Optional(CONF_JEEDOM_KEY, default=default_key)] = str
 
@@ -443,7 +470,7 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
             description_placeholders={
                 "service_name": DEFAULT_ESPHOME_SERVICE,
-                "services_found": str(len(available_services)),
+                "mac_hint": guessed_mac or "introuvable — voir les logs ESPHome",
             },
         )
 
@@ -565,8 +592,28 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                         },
                     )
                     return self.async_create_entry(title="", data={})
+            current_mac  = self.entry.data.get(CONF_MAC, "")
             default_entry = current_entry_id if current_entry_id in esphome_entries else next(iter(esphome_entries))
             available_services = _list_esphome_services(self.hass, default_entry)
+
+            if user_input is not None:
+                esp32_mac = user_input.get(CONF_MAC, "").strip().upper()
+                service   = user_input.get(CONF_ESPHOME_SERVICE, "").strip()
+                if esp32_mac and not _is_valid_mac(esp32_mac):
+                    errors[CONF_MAC] = "invalid_mac"
+                if not service:
+                    errors[CONF_ESPHOME_SERVICE] = "invalid_service"
+                if not errors:
+                    self.hass.config_entries.async_update_entry(
+                        self.entry,
+                        data={
+                            **self.entry.data,
+                            CONF_ESPHOME_ENTRY_ID: user_input[CONF_ESPHOME_ENTRY_ID],
+                            CONF_ESPHOME_SERVICE:  service,
+                            CONF_MAC:              esp32_mac or current_mac,
+                        },
+                    )
+                    return self.async_create_entry(title="", data={})
 
             network_schema: Dict[Any, Any] = {
                 vol.Required(CONF_ESPHOME_ENTRY_ID, default=default_entry): vol.In(esphome_entries),
@@ -576,6 +623,8 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                 network_schema[vol.Required(CONF_ESPHOME_SERVICE, default=default_svc)] = vol.In(available_services)
             else:
                 network_schema[vol.Required(CONF_ESPHOME_SERVICE, default=current_service)] = str
+
+            network_schema[vol.Required(CONF_MAC, default=current_mac or "AA:BB:CC:DD:EE:FF")] = str
 
             return self.async_show_form(
                 step_id="network",
