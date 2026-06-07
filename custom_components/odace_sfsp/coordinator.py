@@ -77,21 +77,25 @@ class OdaceSFSPCoordinator:
         self.hass = hass
         self.entry = entry
 
-        self.send_mode: str = entry.data.get(CONF_SEND_MODE, SEND_MODE_HCI)
+        self.send_mode: str  = entry.data.get(CONF_SEND_MODE, SEND_MODE_HCI)
         self.dongle_mac: str = entry.data.get(CONF_MAC, "00:00:00:00:00:00")
         self.jeedom_key: str = entry.data.get(CONF_JEEDOM_KEY, "")
         self.devices: Dict[str, Dict[str, Any]] = dict(entry.data.get(CONF_DEVICES, {}))
 
-        # Mode HCI
-        self.hci_name: str = entry.data.get(CONF_HCI, "hci0")
-        self.hci_index: int = hci_index_from_name(self.hci_name)
+        # Mode HCI — hci_name/hci_index ne sont pertinents qu'en SEND_MODE_HCI
+        if self.send_mode == SEND_MODE_HCI:
+            self.hci_name:  str = entry.data.get(CONF_HCI, "hci0")
+            self.hci_index: int = hci_index_from_name(self.hci_name)
+        else:
+            self.hci_name  = ""
+            self.hci_index = 0
 
-        # Mode ESP32/MQTT
+        # Mode MQTT
         self.mqtt_topic: str = entry.data.get(CONF_MQTT_TOPIC, DEFAULT_MQTT_TOPIC)
 
         # Mode ESPHome API
         self.esphome_entry_id: str = entry.data.get(CONF_ESPHOME_ENTRY_ID, "")
-        self.esphome_service: str  = entry.data.get(CONF_ESPHOME_SERVICE, DEFAULT_ESPHOME_SERVICE)
+        self.esphome_service:  str = entry.data.get(CONF_ESPHOME_SERVICE, DEFAULT_ESPHOME_SERVICE)
 
         self.learn_mode: bool = False
         self._learn_expires: float = 0
@@ -109,10 +113,7 @@ class OdaceSFSPCoordinator:
         """Enregistre le callback BLE."""
         matcher = BluetoothCallbackMatcher(manufacturer_id=MANUFACTURER_ID)
         self._unsub_bt = bluetooth.async_register_callback(
-            self.hass,
-            self._on_ble_advertisement,
-            matcher,
-            BluetoothScanningMode.PASSIVE,
+            self.hass, self._on_ble_advertisement, matcher, BluetoothScanningMode.PASSIVE,
         )
         if self.send_mode == SEND_MODE_MQTT:
             _LOGGER.info(
@@ -152,32 +153,20 @@ class OdaceSFSPCoordinator:
             return
 
         uuid = result["uuid"].lower()
-        _LOGGER.debug(
-            "Odace SFSP RX uuid=%s model=%s data=%s",
-            uuid, result.get("model"), result["data"],
-        )
+        _LOGGER.debug("Odace SFSP RX uuid=%s model=%s data=%s", uuid, result.get("model"), result["data"])
 
         # ---- Trames de binding ----
         if result["data"].get("type") == "binding":
             if uuid not in self.devices:
                 if self.learn_mode and time.time() < self._learn_expires:
-                    _LOGGER.info(
-                        "Learn mode: binding reçu pour %s (model=%s)",
-                        uuid, result.get("model"),
-                    )
+                    _LOGGER.info("Learn mode: binding reçu pour %s (model=%s)", uuid, result.get("model"))
                     self.learn_mode = False
                     self._pending_bindings.pop(uuid, None)
                     self._schedule_new_device(result)
                 else:
                     # Mémoriser pour que start_learn puisse traiter a posteriori
-                    self._pending_bindings[uuid] = {
-                        "result": result,
-                        "expires": time.time() + _PENDING_BINDING_TTL,
-                    }
-                    _LOGGER.debug(
-                        "Binding de %s mémorisé %.0fs (learn mode off)",
-                        uuid, _PENDING_BINDING_TTL,
-                    )
+                    self._pending_bindings[uuid] = {"result": result, "expires": time.time() + _PENDING_BINDING_TTL}
+                    _LOGGER.debug("Binding de %s mémorisé %.0fs (learn mode off)", uuid, _PENDING_BINDING_TTL)
             else:
                 # Périphérique connu qui renvoie une trame binding (reset usine, perte d'appairage)
                 model = self.devices[uuid].get("model", "")
@@ -201,13 +190,11 @@ class OdaceSFSPCoordinator:
     # ------------------------------------------------------------------
     @callback
     def _schedule_new_device(self, parsed: Dict[str, Any]) -> None:
-        uuid = parsed["uuid"].lower()
+        uuid  = parsed["uuid"].lower()
         model = parsed.get("model", "dcl")
         self.devices[uuid] = {
-            "uuid": uuid,
-            "mac": parsed.get("mac", ""),
-            "model": model,
-            "name": f"Odace SFSP {model} {uuid}",
+            "uuid": uuid, "mac": parsed.get("mac", ""),
+            "model": model, "name": f"Odace SFSP {model} {uuid}",
         }
         async_dispatcher_send(self.hass, SIGNAL_DEVICES_CHANGED)
         if model in ("dcl", "shutter", "plug", "dimmer", "generic"):
@@ -226,7 +213,7 @@ class OdaceSFSPCoordinator:
         await self._async_persist()
         # Supprimer le device (et ses entités) du registre HA
         dev_reg = dr.async_get(self.hass)
-        device = dev_reg.async_get_device(identifiers={(DOMAIN, uuid)})
+        device  = dev_reg.async_get_device(identifiers={(DOMAIN, uuid)})
         if device:
             dev_reg.async_remove_device(device.id)
         async_dispatcher_send(self.hass, SIGNAL_DEVICES_CHANGED)
@@ -240,7 +227,7 @@ class OdaceSFSPCoordinator:
         # Mettre à jour le nom dans le registre HA si besoin
         if "name" in updates:
             dev_reg = dr.async_get(self.hass)
-            device = dev_reg.async_get_device(identifiers={(DOMAIN, uuid)})
+            device  = dev_reg.async_get_device(identifiers={(DOMAIN, uuid)})
             if device:
                 dev_reg.async_update_device(device.id, name=updates["name"])
         async_dispatcher_send(self.hass, SIGNAL_DEVICES_CHANGED)
@@ -257,16 +244,12 @@ class OdaceSFSPCoordinator:
         if self.send_mode == SEND_MODE_MQTT:
             await async_send_mqtt(self.hass, self.mqtt_topic, payload)
         elif self.send_mode == SEND_MODE_ESPHOME_API:
-            await async_send_esphome_api(
-                self.hass, self.esphome_entry_id, self.esphome_service, payload
-            )
+            await async_send_esphome_api(self.hass, self.esphome_entry_id, self.esphome_service, payload)
         else:
             await hci_send(self.hci_index, payload)
 
-    async def async_send_command(
-        self, uuid: str, ac: str, options: Optional[int] = None
-    ) -> None:
-        uuid = uuid.lower()
+    async def async_send_command(self, uuid: str, ac: str, options: Optional[int] = None) -> None:
+        uuid   = uuid.lower()
         device = self.devices.get(uuid)
         if device is None:
             _LOGGER.error("Unknown device %s", uuid)
@@ -276,17 +259,11 @@ class OdaceSFSPCoordinator:
             data["options"] = options
         payload = craft_payload(
             {"uuid": device["uuid"].upper(), "model": device["model"]},
-            "advertisement",
-            self.jeedom_key,
-            self.dongle_mac,
-            data,
+            "advertisement", self.jeedom_key, self.dongle_mac, data,
         )
         self._last_command[uuid] = {"ac": ac, "ts": time.time()}
         await self._dispatch_send(payload)
-        _LOGGER.info(
-            "Odace SFSP TX [%s] uuid=%s ac=%s options=%s",
-            self.send_mode, uuid, ac, options,
-        )
+        _LOGGER.info("Odace SFSP TX [%s] uuid=%s ac=%s options=%s", self.send_mode, uuid, ac, options)
 
     async def async_send_pair(self, uuid: str) -> None:
         """Envoie la trame de pairing pour associer un périphérique commandable.
@@ -294,22 +271,17 @@ class OdaceSFSPCoordinator:
         Applicable aux modèles : dcl, shutter, plug, dimmer, generic.
         Les switches (réception seule) n'ont pas de mécanisme de pairing.
         """
-        uuid = uuid.lower()
+        uuid   = uuid.lower()
         device = self.devices.get(uuid)
         if device is None:
             _LOGGER.error("async_send_pair: device %s inconnu", uuid)
             return
         payload = craft_payload(
             {"uuid": device["uuid"].upper(), "model": device["model"]},
-            "pair",
-            self.jeedom_key,
-            self.dongle_mac,
+            "pair", self.jeedom_key, self.dongle_mac,
         )
         await self._dispatch_send(payload)
-        _LOGGER.info(
-            "Odace SFSP PAIR [%s] envoyé → uuid=%s",
-            self.send_mode, uuid,
-        )
+        _LOGGER.info("Odace SFSP PAIR [%s] envoyé → uuid=%s", self.send_mode, uuid)
 
     def was_commanded_recently(self, uuid: str, ac: str, window: float = 2.0) -> bool:
         """Anti-boucle : True si on vient d'envoyer cette commande pour ce uuid."""
@@ -328,13 +300,12 @@ class OdaceSFSPCoordinator:
         _PENDING_BINDING_TTL) alors que le mode apprentissage était off,
         elles sont traitées immédiatement.
         """
-        self.learn_mode = True
+        self.learn_mode    = True
         self._learn_expires = time.time() + timeout
 
-        now = time.time()
+        now     = time.time()
         pending = {
-            uid: e
-            for uid, e in self._pending_bindings.items()
+            uid: e for uid, e in self._pending_bindings.items()
             if now < e["expires"] and uid not in self.devices
         }
         if pending:

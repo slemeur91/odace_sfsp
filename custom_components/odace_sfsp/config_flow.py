@@ -8,7 +8,7 @@
   async_step_mqtt_broker → Saisie du topic MQTT
   async_step_mqtt_mac    → Découverte automatique MAC ESP32 (8 s) ou saisie manuelle
     ↓ ESPHome API
-  async_step_esphome     → Sélection du device ESPHome (dropdown) + nom du service custom
+  async_step_esphome     → Sélection du device ESPHome (dropdown avec MAC BT) + nom du service
 
 Découverte automatique de la MAC ESP32 (mode MQTT) :
   L'ESP32 publie sa MAC Bluetooth sur ``odace_sfsp/mac`` à la connexion MQTT.
@@ -111,149 +111,54 @@ def _scan_sysfs_adapters() -> Dict[str, str]:
 
 
 def _guess_esphome_bt_mac(hass, entry_id: str) -> str:
-    """Tente de retrouver la MAC Bluetooth de l'ESP32 par plusieurs méthodes.
+    """Détecte la MAC Bluetooth de l'ESP32 via config_entry.runtime_data (HA 2024+).
 
-    Méthode 1a — config_entry.runtime_data (HA 2024+) :
-      Depuis HA 2024.x, les intégrations stockent leurs données dans
-      config_entry.runtime_data plutôt que dans hass.data[domain][entry_id].
+    Depuis HA 2024.x, les intégrations stockent leurs données dans
+    config_entry.runtime_data plutôt que dans hass.data[domain][entry_id].
 
-    Méthode 1b — hass.data["esphome"][entry_id] (HA <2024) :
-      Ancienne localisation de RuntimeEntryData pour compatibilité.
-
-    Méthode 2 — Bluetooth manager de HA :
-      Les proxies ESPHome s'enregistrent comme scanners BLE dans HA.
-      Leur adresse source est la MAC BT de l'ESP32.
-
-    Méthode 3 — device registry CONNECTION_BLUETOOTH :
-      Certaines versions HA/ESPHome enregistrent aussi une connexion BT.
+    Priorité :
+    1. device_info.bluetooth_mac_address (champ dédié, si renseigné par aioesphomeapi)
+    2. device_info.mac_address (WiFi) + 2 — allocation séquentielle standard de l'ESP32
+       (le contrôleur Bluetooth reçoit la MAC WiFi de base + 2)
 
     Retourne la MAC en majuscules (ex: "AA:BB:CC:DD:EE:FF") ou "" si introuvable.
     """
-    # --- Méthode 1a : config_entry.runtime_data (HA 2024+) ---
     try:
         esphome_entry = hass.config_entries.async_get_entry(entry_id)
-        if esphome_entry is not None:
-            runtime_data = getattr(esphome_entry, "runtime_data", None)
-            if runtime_data is not None:
-                device_info = getattr(runtime_data, "device_info", None)
-                if device_info is not None:
-                    # 1. Champ dédié bluetooth_mac_address (aioesphomeapi récent)
-                    bt_mac = getattr(device_info, "bluetooth_mac_address", None) or ""
-                    if bt_mac and bt_mac not in ("", "00:00:00:00:00:00"):
-                        _LOGGER.debug("ESPHome BT MAC (méthode 1a bluetooth_mac_address) : %s", bt_mac)
-                        return bt_mac.upper()
-                    # 2. Dériver depuis mac_address (WiFi) : BT MAC = WiFi MAC + 2 (ESP32 allocation)
-                    wifi_mac = getattr(device_info, "mac_address", None) or ""
-                    if wifi_mac and wifi_mac not in ("", "00:00:00:00:00:00"):
-                        try:
-                            mac_int = int(wifi_mac.replace(":", ""), 16)
-                            bt_int  = mac_int + 2
-                            bt_mac  = ":".join(
-                                f"{(bt_int >> (8 * i)) & 0xFF:02X}" for i in range(5, -1, -1)
-                            )
-                            _LOGGER.debug(
-                                "ESPHome BT MAC (méthode 1a dérivée WiFi MAC %s +2) : %s",
-                                wifi_mac, bt_mac,
-                            )
-                            return bt_mac
-                        except Exception as derive_err:
-                            _LOGGER.debug("Méthode 1a dérivation exception : %s", derive_err)
-                    _LOGGER.debug(
-                        "Méthode 1a : device_info trouvé mais bluetooth_mac_address et mac_address absents "
-                        "(champs : %s)",
-                        [f for f in dir(device_info) if not f.startswith("_")],
-                    )
-                else:
-                    _LOGGER.debug(
-                        "Méthode 1a : runtime_data=%s mais device_info absent",
-                        type(runtime_data).__name__,
-                    )
-            else:
-                _LOGGER.debug("Méthode 1a : pas de runtime_data sur la config entry ESPHome")
-        else:
-            _LOGGER.debug("Méthode 1a : config entry %s introuvable", entry_id)
-    except Exception as err:
-        _LOGGER.debug("Méthode 1a exception : %s", err)
+        if esphome_entry is None:
+            _LOGGER.debug("ESPHome BT MAC : config entry %s introuvable", entry_id)
+            return ""
+        runtime_data = getattr(esphome_entry, "runtime_data", None)
+        if runtime_data is None:
+            _LOGGER.debug("ESPHome BT MAC : pas de runtime_data sur la config entry")
+            return ""
+        device_info = getattr(runtime_data, "device_info", None)
+        if device_info is None:
+            _LOGGER.debug("ESPHome BT MAC : runtime_data=%s sans device_info", type(runtime_data).__name__)
+            return ""
 
-    # --- Méthode 1b : hass.data["esphome"][entry_id] (HA <2024) ---
-    try:
-        esphome_domain_data = hass.data.get("esphome")
-        if isinstance(esphome_domain_data, dict):
-            entry_data = esphome_domain_data.get(entry_id)
-            if entry_data is not None:
-                device_info = getattr(entry_data, "device_info", None)
-                if device_info is not None:
-                    bt_mac = getattr(device_info, "bluetooth_mac_address", None) or ""
-                    if bt_mac and bt_mac not in ("", "00:00:00:00:00:00"):
-                        _LOGGER.debug("ESPHome BT MAC (méthode 1b hass.data) : %s", bt_mac)
-                        return bt_mac.upper()
-                _LOGGER.debug(
-                    "Méthode 1b : entry_data trouvé (type=%s) mais BT MAC absent",
-                    type(entry_data).__name__,
-                )
-            else:
-                _LOGGER.debug("Méthode 1b : entry_id %s absent de hass.data['esphome']", entry_id)
-        else:
-            _LOGGER.debug(
-                "Méthode 1b : hass.data['esphome'] n'est pas un dict (type=%s)",
-                type(esphome_domain_data).__name__ if esphome_domain_data is not None else "absent",
-            )
-    except Exception as err:
-        _LOGGER.debug("Méthode 1b exception : %s", err)
+        # 1. Champ dédié bluetooth_mac_address (aioesphomeapi récent)
+        bt_mac = getattr(device_info, "bluetooth_mac_address", None) or ""
+        if bt_mac and bt_mac not in ("", "00:00:00:00:00:00"):
+            _LOGGER.debug("ESPHome BT MAC (bluetooth_mac_address) : %s", bt_mac)
+            return bt_mac.upper()
 
-    # --- Méthode 2 : bluetooth manager → scanner source ---
-    try:
-        esphome_entry = hass.config_entries.async_get_entry(entry_id)
-        if esphome_entry is not None:
-            device_slug = (
-                esphome_entry.title.lower().replace(" ", "_").replace("-", "_")
-            )
-            bt_manager = hass.data.get("bluetooth")
-            if bt_manager is not None:
-                # _adapters : {source_mac: AdapterDetails}
-                for source, adapter in getattr(bt_manager, "_adapters", {}).items():
-                    adapter_name = (getattr(adapter, "name", "") or "").lower()
-                    if device_slug in adapter_name.replace(" ", "_").replace("-", "_"):
-                        mac = source.upper()
-                        if mac != "00:00:00:00:00:00":
-                            _LOGGER.debug("ESPHome BT MAC (méthode 2 adapter) : %s", mac)
-                            return mac
-                # Fallback : scanners enregistrés
-                for scanner in getattr(bt_manager, "_scanners", {}).values():
-                    scanner_name = (getattr(scanner, "name", "") or "").lower()
-                    if device_slug in scanner_name.replace(" ", "_").replace("-", "_"):
-                        src = getattr(scanner, "source", "") or ""
-                        if src and src.upper() != "00:00:00:00:00:00":
-                            _LOGGER.debug("ESPHome BT MAC (méthode 2 scanner) : %s", src)
-                            return src.upper()
-                _LOGGER.debug(
-                    "Méthode 2 : bt_manager trouvé mais aucun adapter/scanner correspondant à '%s'. "
-                    "Adapters : %s — Scanners : %s",
-                    device_slug,
-                    list(getattr(bt_manager, "_adapters", {}).keys()),
-                    [getattr(s, "source", "?") for s in getattr(bt_manager, "_scanners", {}).values()],
-                )
-            else:
-                _LOGGER.debug("Méthode 2 : hass.data['bluetooth'] absent")
-    except Exception as err:
-        _LOGGER.debug("Méthode 2 exception : %s", err)
+        # 2. Dériver depuis mac_address (WiFi) : BT MAC = WiFi MAC + 2 (allocation ESP32 standard)
+        wifi_mac = getattr(device_info, "mac_address", None) or ""
+        if wifi_mac and wifi_mac not in ("", "00:00:00:00:00:00"):
+            mac_int = int(wifi_mac.replace(":", ""), 16)
+            bt_int  = mac_int + 2
+            bt_mac  = ":".join(f"{(bt_int >> (8 * i)) & 0xFF:02X}" for i in range(5, -1, -1))
+            _LOGGER.debug("ESPHome BT MAC (WiFi %s +2) : %s", wifi_mac, bt_mac)
+            return bt_mac
 
-    # --- Méthode 3 : device registry CONNECTION_BLUETOOTH ---
-    try:
-        from homeassistant.helpers import device_registry as dr
-        dev_reg = dr.async_get(hass)
-        for device in dr.async_entries_for_config_entry(dev_reg, entry_id):
-            for conn_type, conn_id in device.connections:
-                if conn_type == dr.CONNECTION_BLUETOOTH:
-                    _LOGGER.debug("ESPHome BT MAC (méthode 3 device registry) : %s", conn_id)
-                    return conn_id.upper()
-        _LOGGER.debug("Méthode 3 : aucune CONNECTION_BLUETOOTH dans le device registry pour %s", entry_id)
+        _LOGGER.debug("ESPHome BT MAC : device_info présent mais mac_address absent")
     except Exception as err:
-        _LOGGER.debug("Méthode 3 exception : %s", err)
+        _LOGGER.debug("ESPHome BT MAC exception : %s", err)
 
     _LOGGER.debug(
-        "MAC BT ESP32 introuvable automatiquement — saisie manuelle requise. "
-        "Consulter les logs ESPHome au démarrage : 'Bluetooth controller initialized, address XX:XX:XX:XX:XX:XX'"
+        "MAC BT ESP32 introuvable — saisie manuelle requise. "
+        "Voir logs ESPHome : 'Bluetooth controller initialized, address XX:XX:XX:XX:XX:XX'"
     )
     return ""
 
@@ -264,10 +169,7 @@ def _list_esphome_entries(hass) -> Dict[str, str]:
     Utilisé dans le config flow pour proposer un dropdown des devices ESPHome
     disponibles, sans que l'utilisateur ait à saisir quoi que ce soit manuellement.
     """
-    entries: Dict[str, str] = {}
-    for entry in hass.config_entries.async_entries("esphome"):
-        entries[entry.entry_id] = entry.title
-    return entries
+    return {e.entry_id: e.title for e in hass.config_entries.async_entries("esphome")}
 
 
 def _list_esphome_services(hass, entry_id: str) -> Dict[str, str]:
@@ -280,13 +182,12 @@ def _list_esphome_services(hass, entry_id: str) -> Dict[str, str]:
     entry = hass.config_entries.async_get_entry(entry_id)
     if entry is None:
         return {}
-    device_slug = entry.title.lower().replace(" ", "_").replace("-", "_")
-    prefix = f"{device_slug}_"
+    prefix = entry.title.lower().replace(" ", "_").replace("-", "_") + "_"
     services: Dict[str, str] = {}
-    for svc_name in hass.services.async_services().get("esphome", {}):
-        if svc_name.startswith(prefix):
+    for svc in hass.services.async_services().get("esphome", {}):
+        if svc.startswith(prefix):
             # Nom sans le préfixe device, ex : "smart_doorbell_odace_send" → "odace_send"
-            short = svc_name[len(prefix):]
+            short = svc[len(prefix):]
             services[short] = short
     return services
 
@@ -394,19 +295,17 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         adapters = await _list_hci_adapters(self.hass)
         default_key = FORCE_JEEDOM_KEY if FORCE_JEEDOM_KEY else secrets.token_hex(12)
 
-        if FORCE_DONGLE_MAC:
-            adapters_labels = {k: f"{k} ({FORCE_DONGLE_MAC})" for k in adapters}
-        else:
-            adapters_labels = adapters
+        adapters_labels = (
+            {k: f"{k} ({FORCE_DONGLE_MAC})" for k in adapters}
+            if FORCE_DONGLE_MAC else adapters
+        )
 
         if user_input is not None:
             hci_name = user_input[CONF_HCI]
             mac = await self.hass.async_add_executor_job(read_controller_mac, hci_name)
             mac = mac or "00:00:00:00:00:00"
-
             await self.async_set_unique_id(f"odace_sfsp-{mac}")
             self._abort_if_unique_id_configured()
-
             return self.async_create_entry(
                 title=f"Odace SFSP ({hci_name})",
                 data={
@@ -440,16 +339,12 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> FlowResult:
         if not await ha_mqtt.async_wait_for_mqtt_client(self.hass):
             return self.async_abort(reason="mqtt_not_configured")
-
         if user_input is not None:
             self._mqtt_topic = user_input[CONF_MQTT_TOPIC].strip()
             return await self.async_step_mqtt_mac()
-
         return self.async_show_form(
             step_id="mqtt_broker",
-            data_schema=vol.Schema(
-                {vol.Required(CONF_MQTT_TOPIC, default=DEFAULT_MQTT_TOPIC): str}
-            ),
+            data_schema=vol.Schema({vol.Required(CONF_MQTT_TOPIC, default=DEFAULT_MQTT_TOPIC): str}),
             description_placeholders={
                 "mac_topic": DEFAULT_MQTT_MAC_TOPIC,
                 "timeout": str(MAC_DISCOVERY_TIMEOUT),
@@ -485,10 +380,7 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         # Tentative de découverte automatique de la MAC ESP32
         mac_topic = f"{self._mqtt_topic.rsplit('/', 1)[0]}/mac"
-        _LOGGER.debug(
-            "Découverte MAC ESP32 : souscription à %s (%ds)...",
-            mac_topic, MAC_DISCOVERY_TIMEOUT,
-        )
+        _LOGGER.debug("Découverte MAC ESP32 : souscription à %s (%ds)...", mac_topic, MAC_DISCOVERY_TIMEOUT)
         discovered_mac = await _discover_esp32_mac(self.hass, mac_topic, MAC_DISCOVERY_TIMEOUT)
         if discovered_mac:
             _LOGGER.info("MAC ESP32 découverte automatiquement : %s", discovered_mac)
@@ -529,7 +421,6 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """
         errors: Dict[str, str] = {}
         esphome_entries = _list_esphome_entries(self.hass)
-
         if not esphome_entries:
             return self.async_abort(reason="no_esphome_device")
 
@@ -581,25 +472,18 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         # Services disponibles pour le device par défaut (vide si firmware pas encore à jour)
         available_services = _list_esphome_services(self.hass, default_entry)
-
         schema_fields: Dict[Any, Any] = {
             # Dropdown avec MAC BT dans le label pour identifier le bon device
             vol.Required(CONF_ESPHOME_ENTRY_ID, default=default_entry): vol.In(esphome_labels),
         }
-
         if available_services:
             default_svc = (
-                DEFAULT_ESPHOME_SERVICE
-                if DEFAULT_ESPHOME_SERVICE in available_services
+                DEFAULT_ESPHOME_SERVICE if DEFAULT_ESPHOME_SERVICE in available_services
                 else next(iter(available_services))
             )
-            schema_fields[
-                vol.Required(CONF_ESPHOME_SERVICE, default=default_svc)
-            ] = vol.In(available_services)
+            schema_fields[vol.Required(CONF_ESPHOME_SERVICE, default=default_svc)] = vol.In(available_services)
         else:
-            schema_fields[
-                vol.Required(CONF_ESPHOME_SERVICE, default=DEFAULT_ESPHOME_SERVICE)
-            ] = str
+            schema_fields[vol.Required(CONF_ESPHOME_SERVICE, default=DEFAULT_ESPHOME_SERVICE)] = str
 
         # MAC BT optionnelle : laisser vide pour utiliser celle du device sélectionné
         schema_fields[vol.Optional(CONF_MAC, default="")] = str
@@ -616,9 +500,7 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     @staticmethod
-    def async_get_options_flow(
-        entry: config_entries.ConfigEntry,
-    ) -> "OdaceSFSPOptionsFlow":
+    def async_get_options_flow(entry: config_entries.ConfigEntry) -> "OdaceSFSPOptionsFlow":
         return OdaceSFSPOptionsFlow(entry)
 
 
@@ -646,18 +528,14 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
             network_label = "Modifier la configuration ESPHome API"
         else:
             network_label = "Modifier le dongle Bluetooth"
+
         if user_input is not None:
             action = user_input["action"]
-            if action == "network":
-                return await self.async_step_network()
-            if action == "add":
-                return await self.async_step_add()
-            if action == "edit":
-                return await self.async_step_select_edit()
-            if action == "remove":
-                return await self.async_step_select_remove()
-            if action == "advanced":
-                return await self.async_step_advanced()
+            if action == "network":  return await self.async_step_network()
+            if action == "add":     return await self.async_step_add()
+            if action == "edit":    return await self.async_step_select_edit()
+            if action == "remove":  return await self.async_step_select_remove()
+            if action == "advanced":return await self.async_step_advanced()
 
         return self.async_show_form(
             step_id="init",
@@ -686,7 +564,7 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
         errors: Dict[str, str] = {}
 
         if send_mode == SEND_MODE_MQTT:
-            current_mac = self.entry.data.get(CONF_MAC, "")
+            current_mac   = self.entry.data.get(CONF_MAC, "")
             current_topic = self.entry.data.get(CONF_MQTT_TOPIC, DEFAULT_MQTT_TOPIC)
             if user_input is not None:
                 esp32_mac = user_input[CONF_MAC].upper().strip()
@@ -695,20 +573,13 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                 if not errors:
                     self.hass.config_entries.async_update_entry(
                         self.entry,
-                        data={
-                            **self.entry.data,
-                            CONF_MAC: esp32_mac,
-                            CONF_MQTT_TOPIC: user_input[CONF_MQTT_TOPIC].strip(),
-                        },
+                        data={**self.entry.data, CONF_MAC: esp32_mac, CONF_MQTT_TOPIC: user_input[CONF_MQTT_TOPIC].strip()},
                     )
                     return self.async_create_entry(title="", data={})
             return self.async_show_form(
                 step_id="network",
                 data_schema=vol.Schema(
-                    {
-                        vol.Required(CONF_MAC, default=current_mac): str,
-                        vol.Required(CONF_MQTT_TOPIC, default=current_topic): str,
-                    }
+                    {vol.Required(CONF_MAC, default=current_mac): str, vol.Required(CONF_MQTT_TOPIC, default=current_topic): str}
                 ),
                 errors=errors,
             )
@@ -774,25 +645,19 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
             )
 
         else:  # HCI
-            adapters = await _list_hci_adapters(self.hass)
+            adapters    = await _list_hci_adapters(self.hass)
             current_hci = self.entry.data.get(CONF_HCI, DEFAULT_HCI)
             if user_input is not None:
                 hci_name = user_input[CONF_HCI]
                 mac = await self.hass.async_add_executor_job(read_controller_mac, hci_name)
                 self.hass.config_entries.async_update_entry(
                     self.entry,
-                    data={
-                        **self.entry.data,
-                        CONF_HCI: hci_name,
-                        CONF_MAC: mac or "00:00:00:00:00:00",
-                    },
+                    data={**self.entry.data, CONF_HCI: hci_name, CONF_MAC: mac or "00:00:00:00:00:00"},
                 )
                 return self.async_create_entry(title="", data={})
             return self.async_show_form(
                 step_id="network",
-                data_schema=vol.Schema(
-                    {vol.Required(CONF_HCI, default=current_hci): vol.In(adapters)}
-                ),
+                data_schema=vol.Schema({vol.Required(CONF_HCI, default=current_hci): vol.In(adapters)}),
             )
 
     # ------------------------------------------------------------------
@@ -860,12 +725,10 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
 
         # Périphériques détectés récemment (pending bindings)
         pending = coord.get_pending_uuids()
-        detected_choices: Dict[str, str] = {}
-        for p in pending:
-            label = (
-                f"{p['uuid']} ({p['model']}, il y a {p['seconds_ago']}s)"
-            )
-            detected_choices[p["uuid"]] = label
+        detected_choices: Dict[str, str] = {
+            p["uuid"]: f"{p['uuid']} ({p['model']}, il y a {p['seconds_ago']}s)"
+            for p in pending
+        }
         detected_choices["manual"] = "Saisir manuellement"
 
         if user_input is not None:
@@ -885,22 +748,17 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
             elif uuid in coord.devices:
                 errors["base"] = "already_exists"
             else:
-                name = user_input.get(CONF_NAME, "").strip()
+                name  = user_input.get(CONF_NAME, "").strip()
                 model = user_input.get(CONF_MODEL, "dcl")
                 if not name:
                     name = f"Odace SFSP {model} {uuid}"
                 await coord.async_add_device(
-                    {
-                        CONF_UUID: uuid,
-                        CONF_MAC: user_input.get(CONF_MAC, ""),
-                        CONF_MODEL: model,
-                        CONF_NAME: name,
-                    }
+                    {CONF_UUID: uuid, CONF_MAC: user_input.get(CONF_MAC, ""), CONF_MODEL: model, CONF_NAME: name}
                 )
                 return self.async_create_entry(title="", data={})
 
         # Pré-remplir l'UUID si un seul périphérique est en attente
-        default_uuid = pending[0]["uuid"] if len(pending) == 1 else ""
+        default_uuid  = pending[0]["uuid"]  if len(pending) == 1 else ""
         default_model = pending[0]["model"] if len(pending) == 1 else "dcl"
 
         schema_fields: Dict[Any, Any] = {}
@@ -911,10 +769,7 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
         schema_fields.update(
             {
                 vol.Required("uuid_format", default=_UUID_FORMAT_LOGS): vol.In(
-                    {
-                        _UUID_FORMAT_LOGS:  "Format logs/Jeedom (ex : 9c0300)",
-                        _UUID_FORMAT_LABEL: "Format étiquette module (octets inversés, ex : 00039c)",
-                    }
+                    {_UUID_FORMAT_LOGS: "Format logs/Jeedom (ex : 9c0300)", _UUID_FORMAT_LABEL: "Format étiquette module (ex : 00039c)"}
                 ),
                 vol.Optional(CONF_UUID, default=default_uuid): str,
                 vol.Optional(CONF_NAME, default=""): str,
@@ -924,24 +779,18 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
         )
 
         # Préparer les placeholders pour les UUIDs en attente
-        pending_info = (
+        pending_info   = (
             ", ".join(f"{p['uuid']} ({p['model']})" for p in pending)
             if pending
             else "aucun (appuyer sur le bouton de binding puis appeler start_learn)"
         )
-        reversed_hint = (
-            f"{_reverse_uuid(pending[0]['uuid'])}" if len(pending) == 1
-            else "—"
-        )
+        reversed_hint  = _reverse_uuid(pending[0]["uuid"]) if len(pending) == 1 else "—"
 
         return self.async_show_form(
             step_id="add",
             data_schema=vol.Schema(schema_fields),
             errors=errors,
-            description_placeholders={
-                "pending": pending_info,
-                "reversed_hint": reversed_hint,
-            },
+            description_placeholders={"pending": pending_info, "reversed_hint": reversed_hint},
         )
 
     # ------------------------------------------------------------------
@@ -952,17 +801,14 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             self._editing = user_input["uuid"]
             return await self.async_step_edit()
-        choices = {
-            uid: f"{d.get('name', '?')} [{d.get('model', '?')}]"
-            for uid, d in coord.devices.items()
-        }
+        choices = {uid: f"{d.get('name','?')} [{d.get('model','?')}]" for uid, d in coord.devices.items()}
         return self.async_show_form(
             step_id="select_edit",
             data_schema=vol.Schema({vol.Required("uuid"): vol.In(choices)}),
         )
 
     async def async_step_edit(self, user_input=None) -> FlowResult:
-        coord = self.hass.data[DOMAIN][self.entry.entry_id]
+        coord   = self.hass.data[DOMAIN][self.entry.entry_id]
         current = coord.devices[self._editing]
         errors: Dict[str, str] = {}
 
@@ -974,11 +820,7 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
             if not _is_valid_uuid(new_uuid):
                 errors[CONF_UUID] = "invalid_uuid"
             else:
-                updates = {
-                    CONF_NAME: user_input[CONF_NAME],
-                    CONF_MODEL: user_input[CONF_MODEL],
-                    CONF_MAC: user_input.get(CONF_MAC, ""),
-                }
+                updates = {CONF_NAME: user_input[CONF_NAME], CONF_MODEL: user_input[CONF_MODEL], CONF_MAC: user_input.get(CONF_MAC, "")}
                 if new_uuid != self._editing:
                     await coord.async_remove_device(self._editing)
                     await coord.async_add_device({CONF_UUID: new_uuid, **updates})
@@ -992,24 +834,16 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
             data_schema=vol.Schema(
                 {
                     vol.Required("uuid_format", default=_UUID_FORMAT_LOGS): vol.In(
-                        {
-                            _UUID_FORMAT_LOGS:  "Format logs/Jeedom (ex : 9c0300)",
-                            _UUID_FORMAT_LABEL: "Format étiquette module (octets inversés, ex : 00039c)",
-                        }
+                        {_UUID_FORMAT_LOGS: "Format logs/Jeedom (ex : 9c0300)", _UUID_FORMAT_LABEL: "Format étiquette module (ex : 00039c)"}
                     ),
                     vol.Required(CONF_UUID, default=self._editing): str,
                     vol.Required(CONF_NAME, default=current.get("name", "")): str,
-                    vol.Required(
-                        CONF_MODEL, default=current.get("model", "dcl")
-                    ): vol.In(SUPPORTED_MODELS),
+                    vol.Required(CONF_MODEL, default=current.get("model", "dcl")): vol.In(SUPPORTED_MODELS),
                     vol.Optional(CONF_MAC, default=current.get("mac", "")): str,
                 }
             ),
             errors=errors,
-            description_placeholders={
-                "current_uuid": self._editing,
-                "reversed_uuid": reversed_current,
-            },
+            description_placeholders={"current_uuid": self._editing, "reversed_uuid": reversed_current},
         )
 
     # ------------------------------------------------------------------
@@ -1020,10 +854,7 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             await coord.async_remove_device(user_input["uuid"])
             return self.async_create_entry(title="", data={})
-        choices = {
-            uid: f"{d.get('name', '?')} [{d.get('model', '?')}]"
-            for uid, d in coord.devices.items()
-        }
+        choices = {uid: f"{d.get('name','?')} [{d.get('model','?')}]" for uid, d in coord.devices.items()}
         return self.async_show_form(
             step_id="select_remove",
             data_schema=vol.Schema({vol.Required("uuid"): vol.In(choices)}),

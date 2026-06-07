@@ -235,6 +235,17 @@ async def async_send_mqtt(hass, topic: str, payload: str) -> bool:
 # Mode ESPHome API — envoi via service natif ESPHome
 # ---------------------------------------------------------------------------
 
+# Fenêtre de diffusion répétée : réplique le comportement du mode HCI, où le
+# contrôleur radio retransmet le même paquet d'advertising en boucle pendant
+# ~0.5s (cf. async_send : enable adv → sleep(0.5) → disable adv). Côté ESPHome,
+# l'appel de service est fire-and-forget et ne contrôle pas la durée de
+# diffusion radio ; on imite donc la fenêtre en rappelant le service à
+# intervalle court pendant la même durée totale — seule la "couche proxy"
+# (le firmware ESP32 qui reçoit l'appel et pilote réellement le radio) diffère.
+_ESPHOME_BROADCAST_DURATION = 0.5
+_ESPHOME_BROADCAST_INTERVAL = 0.1
+
+
 async def async_send_esphome_api(hass, entry_id: str, service_name: str, payload: str) -> bool:
     """Envoie la trame BLE via un service custom déclaré dans le firmware ESPHome.
 
@@ -246,6 +257,12 @@ async def async_send_esphome_api(hass, entry_id: str, service_name: str, payload
 
     ``entry_id`` est l'entry_id de la config entry ESPHome dans HA.
     Le nom du device (slug) est déduit du titre de cette config entry.
+
+    Pour reproduire fidèlement le mode HCI (qui maintient l'advertising actif
+    pendant ~0.5s, le contrôleur retransmettant le paquet en continu durant
+    cette fenêtre), le service ESPHome est rappelé à intervalle régulier
+    (``_ESPHOME_BROADCAST_INTERVAL``) pendant ``_ESPHOME_BROADCAST_DURATION``
+    secondes — seule la couche proxy (firmware ESP32) change.
     """
     if not validate_payload(payload):
         _LOGGER.warning("Payload invalide, envoi ESPHome API annulé : %s", payload)
@@ -299,14 +316,29 @@ async def async_send_esphome_api(hass, entry_id: str, service_name: str, payload
                 )
                 return False
 
-        await hass.services.async_call(
-            "esphome",
-            ha_service,
-            {"payload": payload_clean},
-            blocking=False,
-        )
+        # Fenêtre de diffusion répétée (équivalent du "enable adv → 0.5s → disable"
+        # côté HCI) : on rappelle le service à intervalle régulier pendant toute
+        # la durée de la fenêtre, pour maximiser les chances que le module
+        # (en scan passif) capte au moins une retransmission.
+        loop = asyncio.get_event_loop()
+        start = loop.time()
+        sent = 0
+        while True:
+            await hass.services.async_call(
+                "esphome",
+                ha_service,
+                {"payload": payload_clean},
+                blocking=False,
+            )
+            sent += 1
+            elapsed = loop.time() - start
+            if elapsed + _ESPHOME_BROADCAST_INTERVAL >= _ESPHOME_BROADCAST_DURATION:
+                break
+            await asyncio.sleep(_ESPHOME_BROADCAST_INTERVAL)
+
         _LOGGER.info(
-            "Send to BLE [ESPHome API esphome.%s]: %s", ha_service, payload_clean,
+            "Send to BLE [ESPHome API esphome.%s]: %s (%d envois sur ~%.1fs)",
+            ha_service, payload_clean, sent, _ESPHOME_BROADCAST_DURATION,
         )
         return True
 
