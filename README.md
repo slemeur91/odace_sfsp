@@ -63,13 +63,13 @@ Lors de la première configuration, l'intégration propose de choisir le protoco
 
 - **ESPHome** : contrôleur Bluetooth distant piloté via un ESP32 flashé avec ESPHome. Ce mode est utile lorsque Home Assistant tourne dans une VM (PROXMOX par exemple) sans accès direct au Bluetooth, ou pour étendre la portée en plaçant l'ESP32 près des modules Odace. Voir la section [Configuration ESPHome](#configuration-esphome) pour le script de compilation.
 
-![Menu sélection du contrôleur](images/Menu%20ajout%20controleur.png)
+![Menu sélection du contrôleur](images/menu-ajout-controleur.png)
 
-![Ajout contrôleur HCI étape 1](images/Ajout%20controleur%20HCI%201.png)
+![Ajout contrôleur HCI étape 1](images/ajout-controleur-hci-1.png)
 
-![Ajout contrôleur HCI étape 2](images/Ajout%20controleur%20HCI%202.png)
+![Ajout contrôleur HCI étape 2](images/ajout-controleur-hci-2.png)
 
-![Ajout contrôleur ESPHome](images/Ajout%20controleur%20ESPHome.png)
+![Ajout contrôleur ESPHome](images/ajout-controleur-esphome.png)
 
 ### Ajout des modules — Association
 
@@ -80,9 +80,9 @@ L'association d'un module Odace SFSP se fait en mode apprentissage :
 3. L'intégration passe en mode apprentissage (timeout paramétrable, 60 s par défaut). Pendant ce délai, appuyer plusieurs fois sur le bouton du module Odace à associer jusqu'à ce que la trame d'association soit reçue.
 4. Le module apparaît avec son UUID. Saisir un nom, vérifier le type détecté (`switch`, `dcl`, `generic`, etc.) et valider.
 
-![Menu Configurer](images/Menu%20configuration.png)
+![Menu Configurer](images/menu-configuration.png)
 
-![Menu ajout d'un module](images/Menu%20ajout%20d'un%20module.png)
+![Menu ajout d'un module](images/menu-ajout-module.png)
 
 ### Modification et suppression d'un module
 
@@ -91,11 +91,11 @@ Depuis le menu **Configurer** de l'intégration il est également possible de :
 - **Modifier un module** : changer son nom ou son type. Si le type change (par exemple un DCL reclassé en `switch`), l'entité précédente est supprimée et une nouvelle entité du bon domaine est créée — aucune entité orpheline n'est laissée.
 - **Supprimer un module** : retire le module de l'intégration et supprime l'entité associée.
 
-![Modification d'un module étape 1](images/Menu%20modification%20d'un%20module%201.png)
+![Modification d'un module étape 1](images/menu-modification-module-1.png)
 
-![Modification d'un module étape 2](images/Menu%20modification%20d'un%20module%202.png)
+![Modification d'un module étape 2](images/menu-modification-module-2.png)
 
-![Suppression d'un module](images/Menu%20suppression%20d'un%20module.png)
+![Suppression d'un module](images/menu-suppression-module.png)
 
 ### Mise à jour du dongle
 
@@ -103,7 +103,7 @@ Si le dongle Bluetooth est remplacé, il est possible de mettre à jour son adre
 
 ### Paramètres avancés
 
-![Menu paramètres avancés](images/Menu%20parametre%20avance.png)
+![Menu paramètres avancés](images/menu-parametre-avance.png)
 
 Le menu **Paramètres avancés** propose deux options :
 
@@ -114,7 +114,7 @@ Permet de consulter ou modifier les deux éléments clés hérités de Jeedom :
 - La **JEEDOM_KEY** est la clé de chiffrement utilisée pour signer les trames BLE envoyées aux modules Odace. Elle est propre à chaque installation et peut être récupérée dans les logs de Jeedom.
 - L'**adresse MAC du dongle** est l'identifiant Bluetooth utilisé lors de l'association des modules. Il est possible de réutiliser l'adresse MAC du dongle Jeedom d'origine avec un autre adaptateur physique — c'est ce qui permet de migrer une installation Jeedom existante vers Home Assistant sans réassocier les modules.
 
-![Clé Jeedom et MAC du dongle](images/Menu%20cle%20jeedom%20et%20mac.png)
+![Clé Jeedom et MAC du dongle](images/menu-cle-jeedom-mac.png)
 
 **2. Export / Import de la configuration des modules**
 
@@ -129,7 +129,7 @@ Exemple de format :
 "FF3A00": {"uuid": "FF3A00", "mac": "60:C0:BF:30:2B:60", "model": "switch", "name": "Interrupteur du Plafonnier de la Salle d'eau"}
 ```
 
-![Export / Import de la configuration](images/Menu%20export%20import.png)
+![Export / Import de la configuration](images/menu-export-import.png)
 
 ### Configuration ESPHome
 
