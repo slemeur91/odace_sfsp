@@ -118,30 +118,3 @@ SCENES = {
 # Signals dispatcher
 SIGNAL_DEVICE_UPDATE = "odace_sfsp_device_update_{uuid}"
 SIGNAL_DEVICES_CHANGED = "odace_sfsp_devices_changed"
-
-
-# ============================================================
-# BLOC FORCE
-# ============================================================
-# Appareils connus (import automatique depuis la config Jeedom)
-KNOWN_DEVICES = {
-}
-# Exemple avec ma liste de périphériques
-#KNOWN_DEVICES = {
-#    "362500": {"uuid": "362500", "mac": "60:C0:BF:25:FF:A9", "model": "dcl", "name": "Armoire de toilette de la Salle de bain"},
-#    "472500": {"uuid": "472500", "mac": "60:C0:BF:26:15:84", "model": "dcl", "name": "Plafonnier de la Salle de bain"},
-#    "8E2200": {"uuid": "8E2200", "mac": "60:C0:BF:25:FE:7B", "model": "dcl", "name": "Armoire de toilette de la Salle d'eau"},
-#    "832200": {"uuid": "832200", "mac": "60:C0:BF:25:F9:3A", "model": "dcl", "name": "Plafonnier de la Salle d'eau"},
-#    "943A00": {"uuid": "943A00", "mac": "60:C0:BF:30:2B:16", "model": "switch", "name": "Interrupteur de l'Armoire de toilette de la Salle de bain"},
-#    "123B00": {"uuid": "123B00", "mac": "60:C0:BF:30:2B:75", "model": "switch", "name": "Interrupteur du Plafonnier de la Salle de bain"},
-#    "BF3A00": {"uuid": "BF3A00", "mac": "60:C0:BF:30:2E:39", "model": "switch", "name": "Interrupteur de l'Armoire de toilette de la Salle d'eau"},
-#    "FF3A00": {"uuid": "FF3A00", "mac": "60:C0:BF:30:2B:60", "model": "switch", "name": "Interrupteur du Plafonnier de la Salle d'eau"},
-#}
-
-FORCE_JEEDOM_KEY = ""
-# Exemple avec ma clé JEEDOM_KEY
-#FORCE_JEEDOM_KEY = "0c0b2018e0e5561995c14ff1"
-
-FORCE_DONGLE_MAC = ""
-# Exemple avec l'adresse MAC de mon dongle Bluetooth
-#FORCE_DONGLE_MAC = "00:15:83:EB:EF:84"

@@ -208,6 +208,7 @@ def _parse_generic(trame: str, cf: str, uuid: str, string: str, result: dict) ->
     data = result["data"]
     if cf == "20":
         data["type"] = "advertisement"
+        string += " advertisement"
         data["firmware"] = trame[58:62]
         state_code = trame[32:34]
         if state_code == "01":
@@ -217,6 +218,7 @@ def _parse_generic(trame: str, cf: str, uuid: str, string: str, result: dict) ->
         string = _parse_groups(trame, string, data, offset=36)
     elif cf == "21":
         data["type"] = "binding"
+        string += " binding"
     return string
 
 
@@ -226,18 +228,23 @@ def _parse_shutter(trame: str, cf: str, uuid: str, string: str, result: dict) ->
     data = result["data"]
     if cf == "30":
         data["type"] = "advertisement"
+        string += " advertisement"  # FIX : manquait dans la version précédente
         data["firmware"] = trame[58:62]
         code = trame[32:34]
         if code == "00":
             data["value"], data["label"] = 100, "Ouvert"
+            string += " state is OPEN"
         elif code == "01":
             data["value"], data["label"] = 0, "Fermé"
+            string += " state is CLOSED"
         elif code in ("05", "06", "07"):
             position = 100 - int(trame[44:46], 16)
             data["value"] = position
             data["label"] = {"05": "Ouverture", "06": "Fermeture", "07": "Arrêté"}[code]
+            string += f" state is {data['label']} position={position}"
     elif cf == "31":
         data["type"] = "binding"
+        string += " binding"
     return string
 
 

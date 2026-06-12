@@ -22,7 +22,14 @@ from .coordinator import OdaceSFSPCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.LIGHT, Platform.EVENT, Platform.COVER, Platform.SWITCH]
+# FIX : Platform.SCENE ajouté pour le modèle "scene"
+PLATFORMS: list[Platform] = [
+    Platform.LIGHT,
+    Platform.EVENT,
+    Platform.COVER,
+    Platform.SWITCH,
+    Platform.SCENE,
+]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

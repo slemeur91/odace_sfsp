@@ -257,8 +257,20 @@ class OdaceSFSPCoordinator:
         data: Dict[str, Any] = {"ac": ac}
         if options is not None:
             data["options"] = options
+
+        # FIX : transmettre "type" au device dict passé à craft_payload.
+        # build_frame() lit device.get("type", "custom") pour déterminer le
+        # Param BLE des scènes (SCENES["custom"]="FC" ou SCENES["schneider"]="FD").
+        # Sans ce champ, le type de scène serait toujours "custom" par défaut.
+        device_for_payload: Dict[str, Any] = {
+            "uuid":  device["uuid"].upper(),
+            "model": device["model"],
+        }
+        if device.get("type"):
+            device_for_payload["type"] = device["type"]
+
         payload = craft_payload(
-            {"uuid": device["uuid"].upper(), "model": device["model"]},
+            device_for_payload,
             "advertisement", self.jeedom_key, self.dongle_mac, data,
         )
         self._last_command[uuid] = {"ac": ac, "ts": time.time()}

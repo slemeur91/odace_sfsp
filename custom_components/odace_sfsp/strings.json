@@ -53,10 +53,22 @@
       },
       "advanced": {
         "title": "Paramètres avancés",
+        "data": { "action": "Action" }
+      },
+      "advanced_settings": {
+        "title": "Clé Jeedom / MAC contrôleur",
         "description": "**Clé Jeedom actuelle :** `{current_key}`\n**MAC contrôleur actuelle :** `{current_mac}`\n\nModifier la clé Jeedom nécessite un re-pairing de tous les périphériques commandables (service `bind_device`). Laisser un champ vide pour ne pas le modifier.",
         "data": {
           "jeedom_key": "Clé Jeedom (laisser vide pour conserver)",
           "mac": "MAC du contrôleur BLE (dongle HCI ou ESP32 — laisser vide pour conserver)"
+        }
+      },
+      "import_export": {
+        "title": "Exporter / Importer les périphériques",
+        "description": "{device_count} périphérique(s) configuré(s). Copiez l'export ou collez une liste à importer (les UUIDs déjà présents sont ignorés).",
+        "data": {
+          "export_json": "Export (copier)",
+          "import_json": "Import (coller)"
         }
       },
       "add": {

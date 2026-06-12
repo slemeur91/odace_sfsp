@@ -8,15 +8,37 @@ Portage avancé du plugin Jeedom `beagle` vers Home Assistant.
 Supporte les DCL (lumières pilotables), les switchs Odace (récepteurs), et
 laisse la porte ouverte aux modèles shutter / generic / plug / dimmer / scene.
 
-> [!IMPORTANT]
-> Ne disposant que de DCL et switchs je n'ai pas pu tester les autres composants.
-> Et ne souhaitant pas refaire l'apprentissage cette partie non plus n'a pas était testée.
-> Le portage a était éffectué grâce à l'IA et je veux bien aider à enrichir le plugin si il y a des volontaires pour tester.
+> [!NOTE]
+> Un grand merci à **@rommess** qui a passé beaucoup de temps pour faire évoluer l'intégration :
+> - Ajout de la prise en compte du module generic
+> - Ajout de la gestion de l'association des modules
+> - Ajout de la gestion du contrôleur Bluetooth branché sur PROXMOX avec une VM Home Assistant
+> - Ajout de la gestion du contrôleur Bluetooth branché sur ESPHome
 
-> [!TIP]
-> Pour le fonctionnement j'ai repris le dongle Bluetooth ainsi que la JEEDOM_KEY de Jeedom.
-> Il est possible de reprendre la clé JEEDOM_KEY (voir les logs de Jeedom) et l'adresse MAC du dongle Jeedom (même avec un autre dongle) : ce sont les 2 éléments qui servent pour l'associasion des périphériques.
-> Ces informations peuvent être forcées dans le fichier const.py ainsi que la liste des périphériques afin qu'ils soient automatiquement renseignés lors du premier lancement de l'intégration.
+## Modules supportés
+
+| Type | Statut | Notice(s) |
+|------|--------|-----------|
+| `switch` | ✅ | [Notice DCL](hardware/notice_DCL.pdf) |
+| `dcl` | ✅ | [Notice DCL](hardware/notice_DCL.pdf) |
+| `generic` | ✅ | [Actionneur générique 10A NLR InOut](hardware/manuel%20SCHS520192.pdf) |
+| `shutter` | — | [Notice volet roulant](hardware/notice_VR.pdf) · [Moteurs compatibles](hardware/liste%20moteurs%20VR%20compatibles-Actionneur%20SE%20ma_j%209juillet2019.pdf) |
+| `plug` | — | [Actionneur faux-plafond](hardware/MFR82543-00%203mai19.pdf) |
+| `dimmer` | — | — |
+| `scene` | — | [Commandes groupées sans fil](hardware/GDE33208-0026Sept19.pdf) |
+
+> ✅ = Testé et validé · — = Non testé (contributions bienvenues)
+
+### Ressources Jeedom
+
+Ces articles expliquent l'installation et la configuration des modules sous Jeedom, dont les principes sont transposables à cette intégration :
+
+- [Recherche SFSP sur Jeedomiser](https://jeedomiser.fr/?s=sfsp)
+- [Interrupteur Odace SFSP avec Jeedom](https://jeedomiser.fr/article/votre-interrupteur-odace-sfsp-avec-jeedom/)
+- [Éclairage avec la gamme Odace SFSP et Jeedom](https://jeedomiser.fr/article/votre-eclairage-avec-la-gamme-odace-sfsp-et-jeedom/)
+- [Actionneur minuteur générique Odace SFSP avec Jeedom](https://jeedomiser.fr/article/actionneur-minuteur-generique-odace-sfsp-avec-jeedom/)
+- [Actionneur pour volet roulant Odace SFSP et Jeedom](https://jeedomiser.fr/article/votre-actionneur-pour-volet-roulant-odace-sfsp-et-jeedom/)
+- [Interrupteur de scène Odace SFSP avec Jeedom](https://jeedomiser.fr/article/votre-interrupteur-de-scene-odace-sfsp-avec-jeedom/)
 
 ## Installation
 
@@ -29,44 +51,147 @@ laisse la porte ouverte aux modèles shutter / generic / plug / dimmer / scene.
 1. Copier le dossier `custom_components/odace_sfsp/` dans `<config_home_assistant>/custom_components/`.
 2. Redémarrer Home Assistant.
 3. **Paramètres → Appareils et services → Ajouter une intégration → Schneider Odace SFSP**.
-4. Choisir le contrôleur Bluetooth (liste issue de l'intégration `bluetooth` de HA — `hci0` par défaut). La MAC est récupérée automatiquement.
+4. Choisir le contrôleur Bluetooth et suivre les étapes de configuration décrites ci-dessous.
 
-## Fonctionnalités
+## Configuration
 
-- **Découverte passive BLE** via l'intégration `bluetooth` de HA : pas de daemon Python séparé, pas de socket, pas de `callback` HTTP.
-  Filtrage direct sur le manufacturer id Schneider `0x02B6`.
-- **DCL → entité `light`** : commande `on`/`off` et écoute d'état.
-  Protection anti-boucle : la réception d'une trame qui confirme l'état fraîchement envoyé ne redéclenche pas l'envoi.
-- **Switch → entité `event`** : chaque appui déclenche un évènement (`toggle`, `on`, `off`, `up`, `down`, `stop`, `dim_up`, `dim_down`, `scene_*`). Utilisable directement comme trigger d'automatisation.
-- **Mode apprentissage** via service `odace_sfsp.start_learn` (timeout paramétrable, par défaut 60 s). Les trames `binding` reçues pendant ce mode sont enregistrées automatiquement.
-- **Ajout / modification / suppression manuelle** depuis le menu *Configurer* de l'intégration ou via les services `odace_sfsp.add_device`, `odace_sfsp.remove_device`.
-  Le changement de modèle supprime l'entity précédente (un DCL passant `switch` ne laisse pas d'entity `light` orpheline).
-- **Logs** conformes au format Jeedom dans le logger `custom_components.odace_sfsp` (trames hex en debug + description lisible, `Beagle TX uuid=... ac=...` en info pour les émissions).
+### Choix du contrôleur Bluetooth
 
-## Services
+Lors de la première configuration, l'intégration propose de choisir le protocole de communication avec le contrôleur Bluetooth :
 
-| Service | Description |
-| --- | --- |
-| `odace_sfsp.send_command` | `uuid`, `ac` (`on`,`off`,`toggle`,`up`,`down`,`stop`,`goto`), `options` (0-100) |
-| `odace_sfsp.start_learn` | Mode inclusion (`timeout` en secondes) |
-| `odace_sfsp.add_device` | `uuid`, `model`, `name`, `mac` |
-| `odace_sfsp.remove_device` | `uuid` |
+- **HCI (local)** : contrôleur Bluetooth directement branché sur la machine qui héberge Home Assistant (Raspberry Pi, NUC, etc.). Home Assistant détecte automatiquement les adaptateurs disponibles (typiquement `hci0`). C'est le mode le plus simple et le plus fiable.
 
-## Exigences système
+- **ESPHome** : contrôleur Bluetooth distant piloté via un ESP32 flashé avec ESPHome. Ce mode est utile lorsque Home Assistant tourne dans une VM (PROXMOX par exemple) sans accès direct au Bluetooth, ou pour étendre la portée en plaçant l'ESP32 près des modules Odace. Voir la section [Configuration ESPHome](#configuration-esphome) pour le script de compilation.
 
-L'**envoi** de trames BLE se fait via `hcitool` (équivalent au daemon Jeedom).
-La **réception** fonctionne nativement via l'intégration `bluetooth` de HA.
+![Menu sélection du contrôleur](images/Menu%20ajout%20controleur.png)
 
-## Validation
+![Ajout contrôleur HCI étape 1](images/Ajout%20controleur%20HCI%201.png)
 
-Un harnais de test (`tests/validate_parser.py`) rejoue les trames réelles extraites de `beagle3.log` (log Jeedom de production) et les compare aux résultats envoyés à Jeedom à l'époque :
+![Ajout contrôleur HCI étape 2](images/Ajout%20controleur%20HCI%202.png)
 
+![Ajout contrôleur ESPHome](images/Ajout%20controleur%20ESPHome.png)
+
+### Ajout des modules — Association
+
+L'association d'un module Odace SFSP se fait en mode apprentissage :
+
+1. Depuis **Paramètres → Appareils et services → Schneider Odace SFSP**, cliquer sur **Configurer**.
+2. Choisir **Ajouter un module**.
+3. L'intégration passe en mode apprentissage (timeout paramétrable, 60 s par défaut). Pendant ce délai, appuyer plusieurs fois sur le bouton du module Odace à associer jusqu'à ce que la trame d'association soit reçue.
+4. Le module apparaît avec son UUID. Saisir un nom, vérifier le type détecté (`switch`, `dcl`, `generic`, etc.) et valider.
+
+![Menu Configurer](images/Menu%20configuration.png)
+
+![Menu ajout d'un module](images/Menu%20ajout%20d'un%20module.png)
+
+### Modification et suppression d'un module
+
+Depuis le menu **Configurer** de l'intégration il est également possible de :
+
+- **Modifier un module** : changer son nom ou son type. Si le type change (par exemple un DCL reclassé en `switch`), l'entité précédente est supprimée et une nouvelle entité du bon domaine est créée — aucune entité orpheline n'est laissée.
+- **Supprimer un module** : retire le module de l'intégration et supprime l'entité associée.
+
+![Modification d'un module étape 1](images/Menu%20modification%20d'un%20module%201.png)
+
+![Modification d'un module étape 2](images/Menu%20modification%20d'un%20module%202.png)
+
+![Suppression d'un module](images/Menu%20suppression%20d'un%20module.png)
+
+### Mise à jour du dongle
+
+Si le dongle Bluetooth est remplacé, il est possible de mettre à jour son adresse MAC dans la configuration de l'intégration sans avoir à réassocier tous les modules. L'option est disponible dans le menu **Configurer**.
+
+### Paramètres avancés
+
+![Menu paramètres avancés](images/Menu%20parametre%20avance.png)
+
+Le menu **Paramètres avancés** propose deux options :
+
+**1. Clé Jeedom et MAC du dongle**
+
+Permet de consulter ou modifier les deux éléments clés hérités de Jeedom :
+
+- La **JEEDOM_KEY** est la clé de chiffrement utilisée pour signer les trames BLE envoyées aux modules Odace. Elle est propre à chaque installation et peut être récupérée dans les logs de Jeedom.
+- L'**adresse MAC du dongle** est l'identifiant Bluetooth utilisé lors de l'association des modules. Il est possible de réutiliser l'adresse MAC du dongle Jeedom d'origine avec un autre adaptateur physique — c'est ce qui permet de migrer une installation Jeedom existante vers Home Assistant sans réassocier les modules.
+
+![Clé Jeedom et MAC du dongle](images/Menu%20cle%20jeedom%20et%20mac.png)
+
+**2. Export / Import de la configuration des modules**
+
+Permet de sauvegarder ou restaurer la liste complète des modules associés au format JSON. Utile pour migrer l'intégration vers une nouvelle instance Home Assistant ou pour pré-renseigner les modules sans repasser par le mode apprentissage.
+
+Exemple de format :
+
+```yaml
+"943A00": {"uuid": "943A00", "mac": "60:C0:BF:30:2B:16", "model": "switch", "name": "Interrupteur de l'Armoire de toilette de la Salle de bain"},
+"123B00": {"uuid": "123B00", "mac": "60:C0:BF:30:2B:75", "model": "switch", "name": "Interrupteur du Plafonnier de la Salle de bain"},
+"BF3A00": {"uuid": "BF3A00", "mac": "60:C0:BF:30:2E:39", "model": "switch", "name": "Interrupteur de l'Armoire de toilette de la Salle d'eau"},
+"FF3A00": {"uuid": "FF3A00", "mac": "60:C0:BF:30:2B:60", "model": "switch", "name": "Interrupteur du Plafonnier de la Salle d'eau"}
 ```
-$ python3 tests/validate_parser.py
-8 réussis / 0 échoués sur 8 cas testés
+
+![Export / Import de la configuration](images/Menu%20export%20import.png)
+
+### Configuration ESPHome
+
+Pour utiliser un ESP32 comme relais Bluetooth (mode ESPHome), le firmware doit exposer un service `odace_send` qui envoie une trame BLE brute. Voici le fragment de configuration à ajouter à votre fichier `esphome/*.yaml` :
+
+```yaml
+api:
+  encryption:
+    key: !secret api_doorbell
+  services:
+    - service: odace_send
+      variables:
+        payload: string
+      then:
+        - lambda: |-
+            std::vector<uint8_t> data;
+            for (size_t i = 0; i + 1 < payload.size(); i += 2)
+              data.push_back((uint8_t)strtol(payload.substr(i, 2).c_str(), nullptr, 16));
+            esp_ble_gap_config_adv_data_raw(data.data(), data.size());
+            esp_ble_adv_params_t p{};
+            p.adv_int_min = p.adv_int_max = 0x20;
+            p.adv_type    = ADV_TYPE_NONCONN_IND;
+            p.own_addr_type = BLE_ADDR_TYPE_PUBLIC;
+            p.channel_map = ADV_CHNL_ALL;
+            esp_ble_gap_start_advertising(&p);
+            delay(500);
+            esp_ble_gap_stop_advertising();
 ```
 
-Les 8 cas couvrent les DCL état `OFF` / `ON` et les interrupteurs `Toggle` avec leurs groupes `ffffffff`.
+Ce service reçoit la trame hexadécimale construite par l'intégration, la décode octet par octet et l'émet en BLE non-connectable, reproduisant exactement le comportement du daemon Jeedom.
+
+## Aide au débogage
+
+Si l'intégration ne se comporte pas comme attendu (module non détecté, commande sans effet, erreur au démarrage), voici comment collecter les informations nécessaires pour signaler un problème.
+
+### Activer les logs de débogage
+
+Ajouter les lignes suivantes dans `configuration.yaml` :
+
+```yaml
+logger:
+  default: warning
+  logs:
+    custom_components.odace_sfsp: debug
+```
+
+Redémarrer Home Assistant (**Paramètres → Système → Redémarrer**).
+
+### Récupérer les logs
+
+1. Aller dans **Paramètres → Système → Journaux**.
+2. Filtrer sur `odace_sfsp`.
+3. Copier les entrées pertinentes (trames hex reçues ou émises, messages d'erreur).
+
+### Signaler un problème
+
+Ouvrir une issue sur le [dépôt GitHub](https://github.com/slemeur91/odace_sfsp/issues) en incluant :
+
+- La description du dysfonctionnement (ce qui est attendu, ce qui se passe réellement).
+- Le type de module concerné (`switch`, `dcl`, `generic`, etc.) et son UUID si connu.
+- Les logs de débogage collectés ci-dessus.
+- La version de l'intégration et de Home Assistant.
 
 ---
 
