@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Odace SFSP — Mode d'envoi BLE",
-        "description": "Choisissez comment les commandes BLE seront envoyées aux périphériques Schneider.",
+        "description": "Choisissez comment les commandes BLE seront envoyées aux modules Schneider.",
         "data": { "send_mode": "Mode d'envoi" }
       },
       "hci": {
@@ -40,7 +40,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "Gérer les périphériques Odace SFSP",
+        "title": "Gérer les modules Odace SFSP",
         "data": { "action": "Action" }
       },
       "network": {
@@ -57,35 +57,35 @@
       },
       "advanced_settings": {
         "title": "Clé Jeedom / MAC contrôleur",
-        "description": "**Clé Jeedom actuelle :** `{current_key}`\n**MAC contrôleur actuelle :** `{current_mac}`\n\nModifier la clé Jeedom nécessite un re-pairing de tous les périphériques commandables (service `bind_device`). Laisser un champ vide pour ne pas le modifier.",
+        "description": "**Clé Jeedom actuelle :** `{current_key}`\n**MAC contrôleur actuelle :** `{current_mac}`\n\nModifier la clé Jeedom nécessite un re-pairing de tous les modules commandables (service `bind_device`). Laisser un champ vide pour ne pas le modifier.",
         "data": {
           "jeedom_key": "Clé Jeedom (laisser vide pour conserver)",
           "mac": "MAC du contrôleur BLE (dongle HCI ou ESP32 — laisser vide pour conserver)"
         }
       },
       "import_export": {
-        "title": "Exporter / Importer les périphériques",
-        "description": "{device_count} périphérique(s) configuré(s). Copiez l'export ou collez une liste à importer (les UUIDs déjà présents sont ignorés).",
+        "title": "Exporter / Importer les modules",
+        "description": "{device_count} module(s) configuré(s). Copiez l'export ou collez une liste à importer (les UUIDs déjà présents sont ignorés).",
         "data": {
           "export_json": "Export (copier)",
           "import_json": "Import (coller)"
         }
       },
       "add": {
-        "title": "Ajouter un périphérique",
-        "description": "Périphériques BLE détectés récemment : **{pending}**\n\n— Format **logs/Jeedom** : UUID tel qu'affiché dans les logs (ex : `9c0300`)\n— Format **étiquette module** : octets inversés (ex : `00039c` → converti en `9c0300`)\n\nSi un périphérique détecté est sélectionné, le champ UUID est ignoré.",
+        "title": "Ajouter un module",
+        "description": "Modules BLE détectés récemment : **{pending}**\n\n— Format **logs/Jeedom** : UUID tel qu'affiché dans les logs (ex : `9c0300`)\n— Format **étiquette module** : octets inversés (ex : `00039c` → converti en `9c0300`)\n\nSi un module détecté est sélectionné, le champ UUID est ignoré.",
         "data": {
-          "detected_uuid": "Périphérique BLE détecté (optionnel)",
+          "detected_uuid": "Module BLE détecté (optionnel)",
           "uuid_format": "Format de l'UUID saisi",
           "uuid": "UUID (6 caractères hex)",
           "name": "Nom (laissez vide pour nom automatique)",
           "model": "Modèle",
-          "mac": "Adresse MAC BLE du périphérique (optionnel)"
+          "mac": "Adresse MAC BLE du module (optionnel)"
         }
       },
-      "select_edit": { "title": "Choisir un périphérique à modifier", "data": { "uuid": "Périphérique" } },
+      "select_edit": { "title": "Choisir un module à modifier", "data": { "uuid": "Module" } },
       "edit": {
-        "title": "Modifier le périphérique",
+        "title": "Modifier le module",
         "description": "UUID actuel : `{current_uuid}` — Équivalent étiquette : `{reversed_uuid}`\n\nChoisissez le format dans lequel vous saisissez le nouvel UUID.",
         "data": {
           "uuid_format": "Format de l'UUID saisi",
@@ -95,10 +95,10 @@
           "mac": "Adresse MAC BLE"
         }
       },
-      "select_remove": { "title": "Choisir un périphérique à supprimer", "data": { "uuid": "Périphérique" } }
+      "select_remove": { "title": "Choisir un module à supprimer", "data": { "uuid": "Module" } }
     },
     "error": {
-      "already_exists": "Un périphérique avec cet UUID existe déjà",
+      "already_exists": "Un module avec cet UUID existe déjà",
       "invalid_mac": "Adresse MAC invalide — format attendu : AA:BB:CC:DD:EE:FF",
       "invalid_uuid": "UUID invalide — 6 caractères hexadécimaux requis (ex : 9c0300). Vérifier que les octets ne sont pas inversés."
     }
@@ -106,8 +106,8 @@
   "services": {
     "send_command": { "name": "Envoyer une commande", "description": "Envoie une trame BLE Odace SFSP" },
     "start_learn": { "name": "Mode apprentissage", "description": "Active l'inclusion (60 s par défaut)" },
-    "add_device": { "name": "Ajouter un périphérique", "description": "Ajoute manuellement un périphérique" },
-    "remove_device": { "name": "Supprimer un périphérique", "description": "Supprime un périphérique" },
-    "bind_device": { "name": "Associer un périphérique", "description": "Envoie la trame de pairing BLE" }
+    "add_device": { "name": "Ajouter un module", "description": "Ajoute manuellement un module" },
+    "remove_device": { "name": "Supprimer un module", "description": "Supprime un module" },
+    "bind_device": { "name": "Associer un module", "description": "Envoie la trame de pairing BLE" }
   }
 }

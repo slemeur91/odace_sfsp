@@ -361,9 +361,9 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                 {
                     vol.Required("action", default="add"): vol.In(
                         {
-                            "add":      "Ajouter un périphérique",
-                            "edit":     "Modifier un périphérique",
-                            "remove":   "Supprimer un périphérique",
+                            "add":      "Ajouter un module",
+                            "edit":     "Modifier un module",
+                            "remove":   "Supprimer un module",
                             "network":  network_label,
                             "advanced": "Paramètres avancés",
                         }
@@ -490,7 +490,7 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                     vol.Required("action", default="settings"): vol.In(
                         {
                             "settings":      "Modifier la clé Jeedom / MAC contrôleur",
-                            "import_export": "Exporter / Importer les périphériques",
+                            "import_export": "Exporter / Importer les modules",
                         }
                     )
                 }

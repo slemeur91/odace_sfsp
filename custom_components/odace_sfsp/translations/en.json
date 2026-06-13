@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Odace SFSP — BLE send mode",
-        "description": "Choose how BLE commands will be sent to Schneider devices.",
+        "description": "Choose how BLE commands will be sent to Schneider modules.",
         "data": { "send_mode": "Send mode" }
       },
       "hci": {
@@ -40,7 +40,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "Manage Odace SFSP devices",
+        "title": "Manage Odace SFSP modules",
         "data": { "action": "Action" }
       },
       "network": {
@@ -57,35 +57,35 @@
       },
       "advanced_settings": {
         "title": "Jeedom key / Controller MAC",
-        "description": "**Current Jeedom key:** `{current_key}`\n**Current controller MAC:** `{current_mac}`\n\nChanging the Jeedom key requires re-pairing all commandable devices (use `bind_device` service). Leave a field empty to keep the current value.",
+        "description": "**Current Jeedom key:** `{current_key}`\n**Current controller MAC:** `{current_mac}`\n\nChanging the Jeedom key requires re-pairing all commandable modules (use `bind_module` service). Leave a field empty to keep the current value.",
         "data": {
           "jeedom_key": "Jeedom key (leave empty to keep current)",
           "mac": "BLE controller MAC (HCI dongle or ESP32 — leave empty to keep current)"
         }
       },
       "import_export": {
-        "title": "Export / Import devices",
-        "description": "{device_count} device(s) configured. Copy the export or paste a list to import (existing UUIDs are skipped).",
+        "title": "Export / Import modules",
+        "description": "{module_count} module(s) configured. Copy the export or paste a list to import (existing UUIDs are skipped).",
         "data": {
           "export_json": "Export (copy)",
           "import_json": "Import (paste)"
         }
       },
       "add": {
-        "title": "Add a device",
-        "description": "Recently detected BLE devices: **{pending}**\n\n— **Logs/Jeedom** format: UUID as shown in logs (e.g. `9c0300`)\n— **Module label** format: reversed bytes (e.g. `00039c` → converted to `9c0300`)\n\nIf a detected device is selected, the UUID field is ignored.",
+        "title": "Add a module",
+        "description": "Recently detected BLE modules: **{pending}**\n\n— **Logs/Jeedom** format: UUID as shown in logs (e.g. `9c0300`)\n— **Module label** format: reversed bytes (e.g. `00039c` → converted to `9c0300`)\n\nIf a detected module is selected, the UUID field is ignored.",
         "data": {
-          "detected_uuid": "Detected BLE device (optional)",
+          "detected_uuid": "Detected BLE module (optional)",
           "uuid_format": "UUID input format",
           "uuid": "UUID (6 hex characters)",
           "name": "Name (leave empty for automatic name)",
           "model": "Model",
-          "mac": "BLE MAC address of the device (optional)"
+          "mac": "BLE MAC address of the module (optional)"
         }
       },
-      "select_edit": { "title": "Choose a device to edit", "data": { "uuid": "Device" } },
+      "select_edit": { "title": "Choose a module to edit", "data": { "uuid": "Module" } },
       "edit": {
-        "title": "Edit device",
+        "title": "Edit module",
         "description": "Current UUID: `{current_uuid}` — Label equivalent: `{reversed_uuid}`\n\nChoose the format in which you are entering the new UUID.",
         "data": {
           "uuid_format": "UUID input format",
@@ -95,10 +95,10 @@
           "mac": "BLE MAC address"
         }
       },
-      "select_remove": { "title": "Choose a device to remove", "data": { "uuid": "Device" } }
+      "select_remove": { "title": "Choose a module to remove", "data": { "uuid": "Module" } }
     },
     "error": {
-      "already_exists": "A device with this UUID already exists",
+      "already_exists": "A module with this UUID already exists",
       "invalid_mac": "Invalid MAC address — expected format: AA:BB:CC:DD:EE:FF",
       "invalid_uuid": "Invalid UUID — 6 hex characters required (e.g. 9c0300). Check that the bytes are not reversed."
     }
@@ -106,8 +106,8 @@
   "services": {
     "send_command": { "name": "Send a command", "description": "Sends an Odace SFSP BLE frame" },
     "start_learn": { "name": "Learn mode", "description": "Enables inclusion (60 s default)" },
-    "add_device": { "name": "Add a device", "description": "Manually add a device" },
-    "remove_device": { "name": "Remove a device", "description": "Removes a device" },
-    "bind_device": { "name": "Bind a device", "description": "Sends the BLE pairing frame" }
+    "add_module": { "name": "Add a module", "description": "Manually add a module" },
+    "remove_module": { "name": "Remove a module", "description": "Removes a module" },
+    "bind_module": { "name": "Bind a module", "description": "Sends the BLE pairing frame" }
   }
 }
