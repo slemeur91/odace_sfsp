@@ -657,6 +657,11 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                 )
                 return self.async_create_entry(title="", data={})
 
+        if coord.devices:
+            status_msg = f"{len(coord.devices)} module(s) configuré(s) — copiez le champ Export pour sauvegarder la liste."
+        else:
+            status_msg = "Aucun module configuré. Collez votre liste dans le champ Import pour ajouter vos modules."
+
         _textarea = TextSelector(TextSelectorConfig(multiline=True))
         return self.async_show_form(
             step_id="import_export",
@@ -668,7 +673,7 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
             ),
             errors=errors,
             description_placeholders={
-                "device_count": str(len(coord.devices)),
+                "status": status_msg,
             },
         )
 
@@ -736,7 +741,7 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
         pending_info  = (
             ", ".join(f"{p['uuid']} ({p['model']})" for p in pending)
             if pending
-            else "aucun (appuyer sur le bouton de binding puis appeler start_learn)"
+            else "aucun (appuyer sur le bouton d'association du module)"
         )
         reversed_hint = _reverse_uuid(pending[0]["uuid"]) if len(pending) == 1 else "—"
 

@@ -65,7 +65,7 @@
       },
       "advanced_settings": {
         "title": "Clé Jeedom / MAC contrôleur",
-        "description": "**Clé Jeedom actuelle :** `{current_key}`\n**MAC contrôleur actuelle :** `{current_mac}`\n\nModifier la clé Jeedom nécessite un re-pairing de tous les modules commandables (service `bind_device`). Laisser un champ vide pour ne pas le modifier.",
+        "description": "**Clé Jeedom actuelle :** `{current_key}`\n**MAC contrôleur actuelle :** `{current_mac}`\n\nModifier la clé Jeedom nécessite une re-association de tous les modules. Laisser un champ vide pour ne pas le modifier.",
         "data": {
           "jeedom_key": "Clé Jeedom (laisser vide pour conserver)",
           "mac": "MAC du contrôleur BLE (contrôleur HCI ou ESP32 — laisser vide pour conserver)"
@@ -73,7 +73,7 @@
       },
       "import_export": {
         "title": "Exporter / Importer les modules",
-        "description": "{device_count} module(s) configuré(s). Copiez l'export ou collez une liste à importer (les UUIDs déjà présents sont ignorés).",
+        "description": "{status}\n\nLes UUIDs déjà présents sont ignorés lors de l'import.",
         "data": {
           "export_json": "Export (copier)",
           "import_json": "Import (coller)"
@@ -81,7 +81,7 @@
       },
       "add": {
         "title": "Ajouter un module",
-        "description": "Modules BLE détectés récemment : **{pending}**\n\n— Format **logs/Jeedom** : UUID tel qu'affiché dans les logs (ex : `9c0300`)\n— Format **étiquette module** : octets inversés (ex : `00039c` → converti en `9c0300`)\n\nSi un module détecté est sélectionné, le champ UUID est ignoré.",
+        "description": "Modules BLE détectés récemment : **{pending}**\n\n**Format de l'UUID :**\n— Format **logs/Jeedom** : UUID tel qu'affiché dans les logs (ex : `9c0300`)\n— Format **étiquette module** : octets inversés (ex : `00039c` → converti en `9c0300`)\n\nSi un module détecté est sélectionné, le champ UUID est ignoré.",
         "data": {
           "detected_uuid": "Module BLE détecté (optionnel)",
           "uuid_format": "Format de l'UUID saisi",
@@ -116,6 +116,6 @@
     "start_learn": { "name": "Mode apprentissage", "description": "Active l'inclusion (60 s par défaut)" },
     "add_device": { "name": "Ajouter un module", "description": "Ajoute manuellement un module" },
     "remove_device": { "name": "Supprimer un module", "description": "Supprime un module" },
-    "bind_device": { "name": "Associer un module", "description": "Envoie la trame de pairing BLE" }
+    "bind_device": { "name": "Associer un module", "description": "Envoie la trame d'association BLE" }
   }
 }
