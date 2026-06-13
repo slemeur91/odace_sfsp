@@ -8,10 +8,17 @@
       },
       "hci": {
         "title": "Contrôleur Bluetooth local",
-        "description": "Contrôleur(s) détecté(s) : **{adapters}**\nLa clé Jeedom est pré-remplie (`{default_key}`).",
+        "description": "Contrôleur(s) détecté(s) : **{adapters}**",
         "data": {
-          "hci": "Contrôleur Bluetooth",
-          "jeedom_key": "Clé Jeedom (optionnel, pour réutiliser un appairage existant)"
+          "hci": "Contrôleur Bluetooth"
+        }
+      },
+      "esphome": {
+        "title": "Proxy BLE ESPHome",
+        "description": "Sélectionnez le module ESPHome qui sera utilisé comme proxy Bluetooth.\nLa MAC Bluetooth est détectée automatiquement et affichée pour identification.",
+        "data": {
+          "esphome_entry_id": "Module ESPHome (proxy BLE)",
+          "esphome_service": "Nom du service BLE custom (ex : odace_send)"
         }
       },
       "mqtt_broker": {
@@ -30,7 +37,8 @@
     },
     "abort": {
       "already_configured": "Cette gateway est déjà configurée",
-      "mqtt_not_configured": "L'intégration MQTT n'est pas configurée dans Home Assistant"
+      "mqtt_not_configured": "L'intégration MQTT n'est pas configurée dans Home Assistant",
+      "no_esphome_device": "Aucun module ESPHome trouvé. Vérifiez que l'intégration ESPHome est configurée dans Home Assistant."
     },
     "error": {
       "invalid_mac": "Adresse MAC invalide — format attendu : AA:BB:CC:DD:EE:FF",

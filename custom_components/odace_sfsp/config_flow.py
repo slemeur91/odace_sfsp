@@ -233,7 +233,7 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 }
             ),
             description_placeholders={
-                "adapters": ", ".join(adapters_labels.values()),
+                "adapters": ", ".join(adapters_labels.keys()),
             },
         )
 
