@@ -69,15 +69,17 @@ Lors de la première configuration, l'intégration propose de choisir le protoco
 
 ![Ajout contrôleur Bluetooth ESPHome](images/ajout-controleur-esphome.png)
 
+### Menu de gestion des modules
+
+Depuis **Paramètres → Appareils et services → Schneider Odace SFSP**, cliquer sur **Configurer** pour accéder au menu principal de gestion des modules. Ce menu propose les actions suivantes : ajouter un module, modifier un module, supprimer un module, ainsi que les paramètres avancés et la modification du contrôleur Bluetooth.
+
+![Menu Configurer](images/menu-configuration.png)
+
 ### Ajout des modules — Association
 
 L'association d'un module Odace SFSP se fait en mode apprentissage :
 
-1. Depuis **Paramètres → Appareils et services → Schneider Odace SFSP**, cliquer sur **Configurer**.
-
-![Menu Configurer](images/menu-configuration.png)
-
-2. Choisir **Ajouter un module**.
+1. Depuis le menu **Configurer**, choisir **Ajouter un module**.
 3. L'intégration passe en mode apprentissage (timeout paramétrable, 60 s par défaut). Pendant ce délai, appuyer plusieurs fois sur le bouton du module Odace à associer jusqu'à ce que la trame d'association soit reçue.
 4. Le module apparaît avec son UUID. Saisir un nom, vérifier le type détecté (`switch`, `dcl`, `generic`, etc.) et valider.
 
