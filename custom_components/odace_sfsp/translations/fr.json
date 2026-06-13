@@ -7,8 +7,8 @@
         "data": { "send_mode": "Mode d'envoi" }
       },
       "hci": {
-        "title": "Dongle Bluetooth local",
-        "description": "Dongle(s) détecté(s) : **{adapters}**\nLa clé Jeedom est pré-remplie (`{default_key}`).",
+        "title": "Contrôleur Bluetooth local",
+        "description": "Contrôleur(s) détecté(s) : **{adapters}**\nLa clé Jeedom est pré-remplie (`{default_key}`).",
         "data": {
           "hci": "Contrôleur Bluetooth",
           "jeedom_key": "Clé Jeedom (optionnel, pour réutiliser un appairage existant)"
@@ -60,7 +60,7 @@
         "description": "**Clé Jeedom actuelle :** `{current_key}`\n**MAC contrôleur actuelle :** `{current_mac}`\n\nModifier la clé Jeedom nécessite un re-pairing de tous les modules commandables (service `bind_device`). Laisser un champ vide pour ne pas le modifier.",
         "data": {
           "jeedom_key": "Clé Jeedom (laisser vide pour conserver)",
-          "mac": "MAC du contrôleur BLE (dongle HCI ou ESP32 — laisser vide pour conserver)"
+          "mac": "MAC du contrôleur BLE (contrôleur HCI ou ESP32 — laisser vide pour conserver)"
         }
       },
       "import_export": {

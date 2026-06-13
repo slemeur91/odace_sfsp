@@ -7,8 +7,8 @@
         "data": { "send_mode": "Send mode" }
       },
       "hci": {
-        "title": "Local Bluetooth dongle",
-        "description": "Detected dongle(s): **{adapters}**\nJeedom key pre-filled (`{default_key}`).",
+        "title": "Local Bluetooth controller",
+        "description": "Detected controller(s): **{adapters}**\nJeedom key pre-filled (`{default_key}`).",
         "data": {
           "hci": "Bluetooth controller",
           "jeedom_key": "Jeedom key (optional, to reuse an existing pairing)"
@@ -60,7 +60,7 @@
         "description": "**Current Jeedom key:** `{current_key}`\n**Current controller MAC:** `{current_mac}`\n\nChanging the Jeedom key requires re-pairing all commandable modules (use `bind_module` service). Leave a field empty to keep the current value.",
         "data": {
           "jeedom_key": "Jeedom key (leave empty to keep current)",
-          "mac": "BLE controller MAC (HCI dongle or ESP32 — leave empty to keep current)"
+          "mac": "BLE controller MAC (HCI controller or ESP32 — leave empty to keep current)"
         }
       },
       "import_export": {

@@ -191,7 +191,7 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 {
                     vol.Required(CONF_SEND_MODE, default=SEND_MODE_HCI): vol.In(
                         {
-                            SEND_MODE_HCI:         "Dongle Bluetooth local (HAOS, Proxmox, USB)",
+                            SEND_MODE_HCI:         "Contrôleur Bluetooth local (HAOS, Proxmox, USB)",
                             SEND_MODE_ESPHOME_API: "ESP32 BLE Proxy via API native ESPHome",
                         }
                     )
@@ -345,7 +345,7 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
         elif send_mode == SEND_MODE_ESPHOME_API:
             network_label = "Modifier la configuration ESPHome API"
         else:
-            network_label = "Modifier le dongle Bluetooth"
+            network_label = "Modifier le contrôleur Bluetooth"
 
         if user_input is not None:
             action = user_input["action"]
