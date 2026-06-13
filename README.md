@@ -67,7 +67,9 @@ Lors de la première configuration, l'intégration propose de choisir le protoco
 
 - **ESPHome** : contrôleur Bluetooth distant piloté via un ESP32 flashé avec ESPHome. Ce mode est utile pour étendre la portée en plaçant l'ESP32 près des modules Odace. Voir la section [Configuration ESPHome](#configuration-esphome) pour le script de compilation.
 
-![Ajout contrôleur Bluetooth ESPHome](images/ajout-controleur-esphome.png)
+![Ajout contrôleur Bluetooth ESPHome étape 1](images/ajout-controleur-esphome-1.png)
+
+![Ajout contrôleur Bluetooth ESPHome étape 2](images/ajout-controleur-esphome-2.png)
 
 ### Menu de gestion des modules
 
