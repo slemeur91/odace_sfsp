@@ -4,9 +4,7 @@
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=flat-square)](https://github.com/hacs/integration)
 [![Maintainers](https://img.shields.io/badge/maintainers-@slemeur91-blue.svg?style=flat-square)](#)
 
-Portage avancé du plugin Jeedom `beagle` vers Home Assistant.
-Supporte les DCL (lumières pilotables), les switchs Odace (récepteurs), et
-laisse la porte ouverte aux modèles shutter / generic / plug / dimmer / scene.
+Cette intégration concerne le portage du plugin Jeedom `beagle` vers Home Assistant.
 
 > [!NOTE]
 > Un grand merci à **@rommess** qui a passé beaucoup de temps pour faire évoluer l'intégration :
@@ -59,28 +57,29 @@ Ces articles expliquent l'installation et la configuration des modules sous Jeed
 
 Lors de la première configuration, l'intégration propose de choisir le protocole de communication avec le contrôleur Bluetooth :
 
-- **HCI (local)** : contrôleur Bluetooth directement branché sur la machine qui héberge Home Assistant (Raspberry Pi, NUC, etc.). Home Assistant détecte automatiquement les adaptateurs disponibles (typiquement `hci0`). C'est le mode le plus simple et le plus fiable.
+![Menu sélection du contrôleur Bluetooth](images/menu-ajout-controleur.png)
 
-- **ESPHome** : contrôleur Bluetooth distant piloté via un ESP32 flashé avec ESPHome. Ce mode est utile lorsque Home Assistant tourne dans une VM (PROXMOX par exemple) sans accès direct au Bluetooth, ou pour étendre la portée en plaçant l'ESP32 près des modules Odace. Voir la section [Configuration ESPHome](#configuration-esphome) pour le script de compilation.
+- **HCI** : contrôleur Bluetooth branché directement sur la machine qui héberge Home Assistant (Raspberry Pi, NUC, etc.) ou passé en USB à une VM (PROXMOX par exemple). Home Assistant détecte automatiquement les adaptateurs disponibles (typiquement `hci0`). C'est le mode le plus simple et le plus fiable.
 
-![Menu sélection du contrôleur](images/menu-ajout-controleur.png)
+![Ajout contrôleur Bluetooth HCI étape 1](images/ajout-controleur-hci-1.png)
 
-![Ajout contrôleur HCI étape 1](images/ajout-controleur-hci-1.png)
+![Ajout contrôleur Bluetooth HCI étape 2](images/ajout-controleur-hci-2.png)
 
-![Ajout contrôleur HCI étape 2](images/ajout-controleur-hci-2.png)
+- **ESPHome** : contrôleur Bluetooth distant piloté via un ESP32 flashé avec ESPHome. Ce mode est utile pour étendre la portée en plaçant l'ESP32 près des modules Odace. Voir la section [Configuration ESPHome](#configuration-esphome) pour le script de compilation.
 
-![Ajout contrôleur ESPHome](images/ajout-controleur-esphome.png)
+![Ajout contrôleur Bluetooth ESPHome](images/ajout-controleur-esphome.png)
 
 ### Ajout des modules — Association
 
 L'association d'un module Odace SFSP se fait en mode apprentissage :
 
 1. Depuis **Paramètres → Appareils et services → Schneider Odace SFSP**, cliquer sur **Configurer**.
+
+![Menu Configurer](images/menu-configuration.png)
+
 2. Choisir **Ajouter un module**.
 3. L'intégration passe en mode apprentissage (timeout paramétrable, 60 s par défaut). Pendant ce délai, appuyer plusieurs fois sur le bouton du module Odace à associer jusqu'à ce que la trame d'association soit reçue.
 4. Le module apparaît avec son UUID. Saisir un nom, vérifier le type détecté (`switch`, `dcl`, `generic`, etc.) et valider.
-
-![Menu Configurer](images/menu-configuration.png)
 
 ![Menu ajout d'un module](images/menu-ajout-module.png)
 
@@ -89,36 +88,37 @@ L'association d'un module Odace SFSP se fait en mode apprentissage :
 Depuis le menu **Configurer** de l'intégration il est également possible de :
 
 - **Modifier un module** : changer son nom ou son type. Si le type change (par exemple un DCL reclassé en `switch`), l'entité précédente est supprimée et une nouvelle entité du bon domaine est créée — aucune entité orpheline n'est laissée.
-- **Supprimer un module** : retire le module de l'intégration et supprime l'entité associée.
 
 ![Modification d'un module étape 1](images/menu-modification-module-1.png)
 
 ![Modification d'un module étape 2](images/menu-modification-module-2.png)
 
+- **Supprimer un module** : retire le module de l'intégration et supprime l'entité associée.
+
 ![Suppression d'un module](images/menu-suppression-module.png)
 
-### Mise à jour du dongle
+### Modification du contrôleur Bluetooth
 
-Si le dongle Bluetooth est remplacé, il est possible de mettre à jour son adresse MAC dans la configuration de l'intégration sans avoir à réassocier tous les modules. L'option est disponible dans le menu **Configurer**.
+Si le contrôleur Bluetooth est remplacé, il est possible de mettre à jour son adresse MAC dans la configuration de l'intégration sans avoir à réassocier tous les modules. L'option est disponible dans le menu **Configurer**.
 
 ### Paramètres avancés
 
-![Menu paramètres avancés](images/menu-parametre-avance.png)
-
 Le menu **Paramètres avancés** propose deux options :
 
-**1. Clé Jeedom et MAC du dongle**
+![Menu paramètres avancés](images/menu-parametre-avance.png)
+
+**1. Clé Jeedom et MAC du contrôleur Bluetooth**
 
 Permet de consulter ou modifier les deux éléments clés hérités de Jeedom :
 
 - La **JEEDOM_KEY** est la clé de chiffrement utilisée pour signer les trames BLE envoyées aux modules Odace. Elle est propre à chaque installation et peut être récupérée dans les logs de Jeedom.
-- L'**adresse MAC du dongle** est l'identifiant Bluetooth utilisé lors de l'association des modules. Il est possible de réutiliser l'adresse MAC du dongle Jeedom d'origine avec un autre adaptateur physique — c'est ce qui permet de migrer une installation Jeedom existante vers Home Assistant sans réassocier les modules.
+- L'**adresse MAC du contrôleur Bluetooth** est l'identifiant utilisé lors de l'association des modules. Il est possible de réutiliser l'adresse MAC du contrôleur Bluetooth Jeedom d'origine avec un autre adaptateur physique — c'est ce qui permet de migrer une installation Jeedom existante vers Home Assistant sans réassocier les modules.
 
-![Clé Jeedom et MAC du dongle](images/menu-cle-jeedom-mac.png)
+![Clé Jeedom et MAC du contrôleur Bluetooth](images/menu-cle-jeedom-mac.png)
 
 **2. Export / Import de la configuration des modules**
 
-Permet de sauvegarder ou restaurer la liste complète des modules associés au format JSON. Utile pour migrer l'intégration vers une nouvelle instance Home Assistant ou pour pré-renseigner les modules sans repasser par le mode apprentissage.
+Permet de sauvegarder ou restaurer la liste complète des modules associés au format JSON ou YAML. Utile pour migrer l'intégration vers une nouvelle instance Home Assistant ou pour pré-renseigner les modules sans repasser par le mode apprentissage.
 
 Exemple de format :
 
