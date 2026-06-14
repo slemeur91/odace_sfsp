@@ -81,9 +81,9 @@ Depuis **Paramètres → Appareils et services → Schneider Odace SFSP**, cliqu
 
 L'association d'un module Odace SFSP se fait en mode apprentissage :
 
-1. Depuis le menu **Configurer**, choisir **Ajouter un module**.
-3. L'intégration passe en mode apprentissage (timeout paramétrable, 60 s par défaut). Pendant ce délai, appuyer plusieurs fois sur le bouton du module Odace à associer jusqu'à ce que la trame d'association soit reçue.
-4. Le module apparaît avec son UUID. Saisir un nom, vérifier le type détecté (`switch`, `dcl`, `generic`, etc.) et valider.
+1. Appuyez une fois sur le module pour le passer en mode apprentissage. Il restera dans cet état pendant 60 s (clignotant rouge et vert).
+2. Depuis le menu **Configurer**, choisir **Ajouter un module**. L'intégration passe en mode apprentissage (timeout paramétrable, 60 s par défaut).
+3. Le module découvert apparaît avec son UUID. Saisir un nom, vérifier le type détecté (`switch`, `dcl`, `generic`, etc.) et valider.
 
 ![Menu ajout d'un module](images/menu-ajout-module.png)
 
