@@ -22,7 +22,6 @@ Cette intégration concerne le portage du plugin Jeedom `beagle` vers Home Assis
 | `generic` | ✅ | [Actionneur générique 10A NLR InOut](hardware/manuel%20SCHS520192.pdf) |
 | `shutter` | — | [Notice volet roulant](hardware/notice_VR.pdf) · [Moteurs compatibles](hardware/liste%20moteurs%20VR%20compatibles-Actionneur%20SE%20ma_j%209juillet2019.pdf) |
 | `plug` | — | [Actionneur faux-plafond](hardware/MFR82543-00%203mai19.pdf) |
-| `dimmer` | — | — |
 | `scene` | — | [Commandes groupées sans fil](hardware/GDE33208-0026Sept19.pdf) |
 
 > ✅ = Testé et validé · — = Non testé (contributions bienvenues)
