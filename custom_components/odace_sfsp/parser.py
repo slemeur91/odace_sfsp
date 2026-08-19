@@ -228,7 +228,7 @@ def _parse_shutter(trame: str, cf: str, uuid: str, string: str, result: dict) ->
     data = result["data"]
     if cf == "30":
         data["type"] = "advertisement"
-        string += " advertisement"  # FIX : manquait dans la version précédente
+        string += " advertisement"
         data["firmware"] = trame[58:62]
         code = trame[32:34]
         if code == "00":
@@ -238,13 +238,58 @@ def _parse_shutter(trame: str, cf: str, uuid: str, string: str, result: dict) ->
             data["value"], data["label"] = 0, "Fermé"
             string += " state is CLOSED"
         elif code in ("05", "06", "07"):
-            position = 100 - int(trame[44:46], 16)
-            data["value"] = position
-            data["label"] = {"05": "Ouverture", "06": "Fermeture", "07": "Arrêté"}[code]
-            string += f" state is {data['label']} position={position}"
+            raw = int(trame[44:46], 16)
+            # 0xFF = position inconnue (module non calibré)
+            position = max(0, min(100, 100 - raw)) if raw != 0xFF else None
+            label = {"05": "Ouverture", "06": "Fermeture", "07": "Arrêté"}[code]
+            data["label"] = label
+            if position is not None:
+                data["value"] = position
+                string += f" state is {label} position={position}"
+            else:
+                string += f" state is {label} position=unknown"
+        elif code == "10":
+            data["paired"] = "denied"
+            string += " pairing denied"
+        elif code == "11":
+            data["paired"] = "ok"
+            string += " pairing ok"
+        elif code == "12":
+            data["paired"] = "paired"
+            string += " paired"
+        elif code == "13":
+            data["paired"] = "unpaired"
+            string += " unpaired"
+        # Groupes (parité Jeedom)
+        data["groups"] = {}
+        group1uuid = trame[36:44]
+        data["groups"][group1uuid] = {"data": {}}
+        g1state = trame[44:46]
+        if g1state == "00":
+            data["groups"][group1uuid]["data"] = {"value": 100, "label": "Ouvert"}
+        elif g1state == "01":
+            data["groups"][group1uuid]["data"] = {"value": 0, "label": "Fermé"}
+        string += f" group1:{group1uuid}"
+        group2uuid = trame[46:54]
+        data["groups"][group2uuid] = {"data": {}}
+        g2state = trame[54:56]
+        if g2state == "00":
+            data["groups"][group2uuid]["data"] = {"value": 100, "label": "Ouvert"}
+        elif g2state == "01":
+            data["groups"][group2uuid]["data"] = {"value": 0, "label": "Fermé"}
+        string += f" group2:{group2uuid}"
     elif cf == "31":
         data["type"] = "binding"
         string += " binding"
+    elif cf == "3b":
+        data["type"] = "group"
+        data["groups"] = [trame[38:46], trame[46:54]]
+        string += f" group {data['groups']}"
+    elif cf in ("3c", "3d"):
+        data["type"] = "scene"
+        data["subtype"] = "custom" if cf == "3c" else "schneider"
+        data["scenes"] = [trame[38:46], trame[46:54], trame[54:62]]
+        string += f" {data['subtype']}scene {data['scenes']}"
     return string
 
 
