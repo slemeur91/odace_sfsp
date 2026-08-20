@@ -155,6 +155,17 @@ async def async_send(hci_index: int, payload: str) -> bool:
         return False
     payload_spaced = " ".join(payload[i : i + 2] for i in range(0, len(payload), 2)).upper()
     _LOGGER.info("Send to BLE [HCI hci%d]: %s", hci_index, payload_spaced)
+    # Désactive le scan passif de BlueZ avant d'activer l'advertising.
+    # Sur la plupart des chipsets BLE, scan et advertising sont mutuellement
+    # exclusifs : si BlueZ maintient le scan actif, cmd 0x000a 01 peut être
+    # ignoré ou produire une trame corrompue → CMAC invalide → module rejette.
+    pre_cmd = f"hcitool -i hci{hci_index} cmd 0x08 0x000c 00 00"
+    proc = await asyncio.create_subprocess_shell(
+        pre_cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
+    )
+    await proc.communicate()
+    await asyncio.sleep(0.05)  # laisse le contrôleur sortir du mode scan
+
     cmds = [
         f"hcitool -i hci{hci_index} cmd 0x08 0x0008 1F {payload_spaced}",
         f"hcitool -i hci{hci_index} cmd 0x08 0x0006 A0 00 A0 00 03 00 00 00 00 00 00 00 00 07 00",

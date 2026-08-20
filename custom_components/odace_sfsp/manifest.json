@@ -1,7 +1,7 @@
 {
   "domain": "odace_sfsp",
   "name": "Schneider Odace SFSP",
-  "version": "1.0.0",
+  "version": "2.0.1_beta2",
   "codeowners": ["@slemeur91"],
   "config_flow": true,
   "dependencies": ["bluetooth"],
