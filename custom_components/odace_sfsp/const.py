@@ -115,6 +115,11 @@ SCENES = {
     "custom": "FC",
 }
 
+# Modèles pour lesquels le suffixe FF est placé APRÈS l'UUID dans le champ cible
+# (uuid + FF). Pour les autres modèles, le FF est placé AVANT (FF + uuid), conformément
+# au comportement Jeedom. Le volet a un comportement firmware différent des autres.
+UUID_FF_SUFFIX_MODELS = {"shutter"}
+
 # Signals dispatcher
 SIGNAL_DEVICE_UPDATE = "odace_sfsp_device_update_{uuid}"
 SIGNAL_DEVICES_CHANGED = "odace_sfsp_devices_changed"

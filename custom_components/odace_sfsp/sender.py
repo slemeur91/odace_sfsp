@@ -34,6 +34,7 @@ from .const import (
     UNIQUE_HEADER,
     UNIQUE_KEY,
     UUID_CONTROLLER,
+    UUID_FF_SUFFIX_MODELS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -64,7 +65,10 @@ def build_frame(device: Dict[str, Any], frame_type: str, jeedom_key: str, data: 
         elif device["model"].startswith("group"):
             param = "FB"
         else:
-            target_uuid = target_uuid + "FF"
+            if device["model"] in UUID_FF_SUFFIX_MODELS:
+                target_uuid = target_uuid + "FF"
+            else:
+                target_uuid = "FF" + target_uuid
         if "options" in data:
             param = hex(100 - int(data["options"]))[2:]
         payload = (
