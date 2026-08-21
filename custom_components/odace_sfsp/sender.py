@@ -64,7 +64,7 @@ def build_frame(device: Dict[str, Any], frame_type: str, jeedom_key: str, data: 
         elif device["model"].startswith("group"):
             param = "FB"
         else:
-            target_uuid = "FF" + target_uuid
+            target_uuid = target_uuid + "FF"
         if "options" in data:
             param = hex(100 - int(data["options"]))[2:]
         payload = (

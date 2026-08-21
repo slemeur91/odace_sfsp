@@ -105,6 +105,9 @@ class OdaceSFSPCoordinator:
         self._last_command: Dict[str, Dict[str, Any]] = {}
         # Trames binding reçues hors mode apprentissage (mémorisées _PENDING_BINDING_TTL s)
         self._pending_bindings: Dict[str, Dict[str, Any]] = {}
+        # Horodatage du dernier ré-appairage automatique (code 13) par uuid
+        # Limite : une seule tentative automatique par fenêtre de 30 s
+        self._pair_retry_sent: Dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -182,6 +185,28 @@ class OdaceSFSPCoordinator:
 
         if not self.devices[uuid].get("mac"):
             self.devices[uuid]["mac"] = service_info.address
+
+        # Détection code 13 (module désappairé après trame pair) → ré-appairage automatique.
+        # Le module utilise un mécanisme de bascule : chaque trame pair inverse l'état.
+        # Si on reçoit "unpaired", on renvoit une trame pair pour repasser en "paired".
+        # Limite : une seule tentative automatique par fenêtre de 30 s pour éviter
+        # toute boucle infinie en cas de dysfonctionnement matériel.
+        if result["data"].get("paired") == "unpaired":
+            last_retry = self._pair_retry_sent.get(uuid, 0)
+            if time.time() - last_retry > 30:
+                _LOGGER.warning(
+                    "Odace SFSP %s a répondu 'unpaired' (code 13) — ré-appairage automatique",
+                    uuid,
+                )
+                self._pair_retry_sent[uuid] = time.time()
+                self.hass.async_create_task(self.async_send_pair(uuid))
+            else:
+                _LOGGER.error(
+                    "Odace SFSP %s toujours 'unpaired' après ré-appairage automatique — "
+                    "intervention manuelle requise (bouton physique du module)",
+                    uuid,
+                )
+            return
 
         async_dispatcher_send(self.hass, SIGNAL_DEVICE_UPDATE.format(uuid=uuid), result)
 
