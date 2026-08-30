@@ -116,6 +116,9 @@ class OdaceSFSPCoordinator:
     # ------------------------------------------------------------------
     async def async_start(self) -> None:
         """Enregistre le callback BLE."""
+        if self.send_mode == SEND_MODE_HCI:
+            await self._resolve_hci_by_mac()
+
         matcher = BluetoothCallbackMatcher(manufacturer_id=MANUFACTURER_ID)
         self._unsub_bt = bluetooth.async_register_callback(
             self.hass, self._on_ble_advertisement, matcher, BluetoothScanningMode.PASSIVE,
@@ -135,6 +138,77 @@ class OdaceSFSPCoordinator:
                 "Odace SFSP [HCI] — %s (MAC %s) — %d devices",
                 self.hci_name, self.dongle_mac, len(self.devices),
             )
+
+    async def _resolve_hci_by_mac(self) -> None:
+        """Résout dynamiquement l'interface HCI si le dongle a démarré sur un hciX inattendu.
+
+        Stratégie :
+        1. Vérifier si l'interface configurée (hci_name) est une interface fantôme (MAC nulle).
+        2. Si oui, chercher parmi les adaptateurs connus de HA celui qui a une vraie MAC.
+        3. dongle_mac est utilisée uniquement comme indice de priorité si elle correspond
+           à un adaptateur réel — elle peut être une MAC d'encodage custom différente de la
+           MAC physique, auquel cas elle est ignorée pour la résolution.
+
+        Cette méthode ne modifie pas dongle_mac (utilisée pour l'encodage CMAC des trames).
+        """
+        _NULL_MAC = "00:00:00:00:00:00"
+
+        try:
+            adapters = await bluetooth.async_get_adapters(self.hass)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("_resolve_hci_by_mac : impossible de lire les adaptateurs BLE : %s", err)
+            return
+
+        # Trouver l'adaptateur actuellement configuré
+        configured = next((a for a in adapters if a.get("name") == self.hci_name), None)
+        if configured is None:
+            _LOGGER.warning(
+                "Odace SFSP — interface %s introuvable dans les adaptateurs HA"
+                " (adaptateurs : %s)",
+                self.hci_name, [a.get("name") for a in adapters],
+            )
+            return
+
+        configured_mac = configured.get("address", _NULL_MAC)
+        if configured_mac.upper() != _NULL_MAC:
+            # L'interface configurée a une vraie MAC → aucun problème
+            _LOGGER.debug(
+                "_resolve_hci_by_mac : %s confirmé avec MAC %s", self.hci_name, configured_mac
+            )
+            return
+
+        # Interface configurée = fantôme (MAC nulle) → chercher une interface réelle
+        real_adapters = [
+            a for a in adapters
+            if a.get("address", _NULL_MAC).upper() != _NULL_MAC
+        ]
+        if not real_adapters:
+            _LOGGER.warning(
+                "Odace SFSP — %s est une interface fantôme (MAC nulle) mais"
+                " aucun autre adaptateur BLE réel trouvé dans HA",
+                self.hci_name,
+            )
+            return
+
+        # Si dongle_mac est une vraie MAC physique (pas custom), elle peut servir de priorité
+        priority = None
+        if self.dongle_mac.upper() != _NULL_MAC:
+            priority = next(
+                (a for a in real_adapters if a.get("address", "").upper() == self.dongle_mac.upper()),
+                None,
+            )
+
+        resolved_adapter = priority or real_adapters[0]
+        resolved_name = resolved_adapter.get("name", "")
+        resolved_mac = resolved_adapter.get("address", "")
+
+        _LOGGER.warning(
+            "Odace SFSP — %s est une interface fantôme (MAC nulle) →"
+            " basculement sur %s (MAC %s)",
+            self.hci_name, resolved_name, resolved_mac,
+        )
+        self.hci_name = resolved_name
+        self.hci_index = hci_index_from_name(resolved_name)
 
     async def async_stop(self) -> None:
         if self._unsub_bt is not None:

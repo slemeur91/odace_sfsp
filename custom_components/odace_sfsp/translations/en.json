@@ -121,6 +121,17 @@
         "data": {
           "uuid": "Module"
         }
+      },
+      "confirm_remove": {
+        "title": "Remove {name}",
+        "description": "How do you want to remove module **{name}** (`{uuid}`)?",
+        "data": {
+          "action": "Action"
+        }
+      },
+      "unpair_instructions": {
+        "title": "Unpairing in progress",
+        "description": "Press the **physical button** on module `{uuid}` within **60 seconds** to confirm unpairing.\n\nThe module will be unpaired and automatically removed from Home Assistant.\n\n_If the physical button is not accessible, perform a long reset (10 s) on the module, then manually delete the device in HA._"
       }
     },
     "error": {
@@ -151,12 +162,4 @@
       "description": "Sends the BLE pairing frame"
     }
   },
-  "entity": {
-    "button": {
-      "unpair": {
-        "name": "Unpair and remove",
-        "description": "Press this button, then press the physical button on the module within 60 seconds. The module will be unpaired (confirmed by code 13) and removed from Home Assistant."
-      }
-    }
-  }
 }

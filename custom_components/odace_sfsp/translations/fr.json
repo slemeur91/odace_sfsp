@@ -121,6 +121,17 @@
         "data": {
           "uuid": "Module"
         }
+      },
+      "confirm_remove": {
+        "title": "Supprimer {name}",
+        "description": "Comment voulez-vous supprimer le module **{name}** (`{uuid}`) ?",
+        "data": {
+          "action": "Action"
+        }
+      },
+      "unpair_instructions": {
+        "title": "Désappariage en cours",
+        "description": "Appuyez sur le **bouton physique** du module `{uuid}` dans les **60 secondes** pour confirmer le désappariage.\n\nLe module sera désappairé puis automatiquement supprimé de Home Assistant.\n\n_Si le bouton physique n'est pas accessible, effectuez un reset long (10 s) sur le module, puis supprimez le device manuellement dans HA._"
       }
     },
     "error": {
@@ -151,12 +162,4 @@
       "description": "Envoie la trame d'association BLE"
     }
   },
-  "entity": {
-    "button": {
-      "unpair": {
-        "name": "Désappairer et supprimer",
-        "description": "Appuyez sur ce bouton, puis appuyez sur le bouton physique du module dans les 60 secondes. Le module sera désappairé (confirmation par le code 13) puis supprimé de Home Assistant."
-      }
-    }
-  }
 }

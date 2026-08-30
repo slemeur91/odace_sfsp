@@ -823,10 +823,43 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
     async def async_step_select_remove(self, user_input=None) -> FlowResult:
         coord = self.hass.data[DOMAIN][self.entry.entry_id]
         if user_input is not None:
-            await coord.async_remove_device(user_input["uuid"])
-            return self.async_create_entry(title="", data={})
+            self._remove_uuid = user_input["uuid"]
+            return await self.async_step_confirm_remove()
         choices = {uid: f"{d.get('name','?')} [{d.get('model','?')}]" for uid, d in coord.devices.items()}
         return self.async_show_form(
             step_id="select_remove",
             data_schema=vol.Schema({vol.Required("uuid"): vol.In(choices)}),
+        )
+
+    async def async_step_confirm_remove(self, user_input=None) -> FlowResult:
+        coord = self.hass.data[DOMAIN][self.entry.entry_id]
+        uuid = self._remove_uuid
+        if user_input is not None:
+            if user_input["action"] == "unpair_and_remove":
+                await coord.start_unpair(uuid)
+                return await self.async_step_unpair_instructions()
+            else:
+                await coord.async_remove_device(uuid)
+                return self.async_create_entry(title="", data={})
+        device = coord.devices.get(uuid, {})
+        name = device.get("name", uuid)
+        return self.async_show_form(
+            step_id="confirm_remove",
+            description_placeholders={"name": name, "uuid": uuid},
+            data_schema=vol.Schema({
+                vol.Required("action", default="remove_only"): vol.In({
+                    "remove_only": "Supprimer de HA uniquement",
+                    "unpair_and_remove": "Désappairer le module puis supprimer de HA",
+                }),
+            }),
+        )
+
+    async def async_step_unpair_instructions(self, user_input=None) -> FlowResult:
+        if user_input is not None:
+            return self.async_create_entry(title="", data={})
+        uuid = self._remove_uuid
+        return self.async_show_form(
+            step_id="unpair_instructions",
+            description_placeholders={"uuid": uuid},
+            data_schema=vol.Schema({}),
         )
