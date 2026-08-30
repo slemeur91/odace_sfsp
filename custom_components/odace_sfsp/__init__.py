@@ -24,6 +24,7 @@ _LOGGER = logging.getLogger(__name__)
 
 # FIX : Platform.SCENE ajouté pour le modèle "scene"
 PLATFORMS: list[Platform] = [
+    Platform.BUTTON,
     Platform.LIGHT,
     Platform.EVENT,
     Platform.COVER,

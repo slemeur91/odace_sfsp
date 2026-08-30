@@ -10,6 +10,7 @@ Les installations existantes sans CONF_SEND_MODE utilisent le mode HCI par défa
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any, Dict, Optional
@@ -105,9 +106,10 @@ class OdaceSFSPCoordinator:
         self._last_command: Dict[str, Dict[str, Any]] = {}
         # Trames binding reçues hors mode apprentissage (mémorisées _PENDING_BINDING_TTL s)
         self._pending_bindings: Dict[str, Dict[str, Any]] = {}
-        # Horodatage du dernier ré-appairage automatique (code 13) par uuid
-        # Limite : une seule tentative automatique par fenêtre de 30 s
-        self._pair_retry_sent: Dict[str, float] = {}
+        # UUIDs en attente de désappariage (bouton "Désappairer et supprimer")
+        self._pending_unpair: set = set()
+        # UUIDs pour lesquels la trame pair a été envoyée, en attente du code 13 (confirmation désappariage)
+        self._pending_unpair_confirm: set = set()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -171,9 +173,18 @@ class OdaceSFSPCoordinator:
                     self._pending_bindings[uuid] = {"result": result, "expires": time.time() + _PENDING_BINDING_TTL}
                     _LOGGER.debug("Binding de %s mémorisé %.0fs (learn mode off)", uuid, _PENDING_BINDING_TTL)
             else:
-                # Périphérique connu qui renvoie une trame binding (reset usine, perte d'appairage)
+                # Périphérique connu qui renvoie une trame binding
                 model = self.devices[uuid].get("model", "")
-                if model in ("dcl", "shutter", "plug", "dimmer", "generic"):
+                if uuid in self._pending_unpair:
+                    # Mode désappariage actif : envoyer pair (toggle → désappairé) puis retirer
+                    self._pending_unpair.discard(uuid)
+                    _LOGGER.info(
+                        "Désappariage %s : binding reçu → envoi pair (toggle désappairé) puis suppression",
+                        uuid,
+                    )
+                    self.hass.async_create_task(self._async_unpair_and_remove(uuid))
+                elif model in ("dcl", "shutter", "plug", "dimmer", "generic"):
+                    # Reset usine ou perte d'appairage → ré-appairage automatique
                     _LOGGER.info("Re-binding connu %s → envoi pair", uuid)
                     self.hass.async_create_task(self.async_send_pair(uuid))
             return
@@ -186,26 +197,11 @@ class OdaceSFSPCoordinator:
         if not self.devices[uuid].get("mac"):
             self.devices[uuid]["mac"] = service_info.address
 
-        # Détection code 13 (module désappairé après trame pair) → ré-appairage automatique.
-        # Le module utilise un mécanisme de bascule : chaque trame pair inverse l'état.
-        # Si on reçoit "unpaired", on renvoit une trame pair pour repasser en "paired".
-        # Limite : une seule tentative automatique par fenêtre de 30 s pour éviter
-        # toute boucle infinie en cas de dysfonctionnement matériel.
-        if result["data"].get("paired") == "unpaired":
-            last_retry = self._pair_retry_sent.get(uuid, 0)
-            if time.time() - last_retry > 30:
-                _LOGGER.warning(
-                    "Odace SFSP %s a répondu 'unpaired' (code 13) — ré-appairage automatique",
-                    uuid,
-                )
-                self._pair_retry_sent[uuid] = time.time()
-                self.hass.async_create_task(self.async_send_pair(uuid))
-            else:
-                _LOGGER.error(
-                    "Odace SFSP %s toujours 'unpaired' après ré-appairage automatique — "
-                    "intervention manuelle requise (bouton physique du module)",
-                    uuid,
-                )
+        # Confirmation de désappariage : le module diffuse code 13 (paired=unpaired)
+        if uuid in self._pending_unpair_confirm and result["data"].get("paired") == "unpaired":
+            self._pending_unpair_confirm.discard(uuid)
+            _LOGGER.info("Odace SFSP — désappariage confirmé (code 13) pour %s → suppression", uuid)
+            self.hass.async_create_task(self.async_remove_device(uuid))
             return
 
         async_dispatcher_send(self.hass, SIGNAL_DEVICE_UPDATE.format(uuid=uuid), result)
@@ -319,6 +315,50 @@ class OdaceSFSPCoordinator:
         )
         await self._dispatch_send(payload)
         _LOGGER.info("Odace SFSP PAIR [%s] envoyé → uuid=%s", self.send_mode, uuid)
+
+    async def start_unpair(self, uuid: str, timeout: float = 60.0) -> None:
+        """Active le mode désappariage pour un UUID donné.
+
+        Le coordinateur attend la prochaine trame binding de ce device.
+        Quand elle arrive, il envoie une trame pair (toggle → désappairé)
+        puis retire le device de HA.
+        """
+        uuid = uuid.lower()
+        if uuid not in self.devices:
+            _LOGGER.error("start_unpair: device %s inconnu", uuid)
+            return
+        self._pending_unpair.add(uuid)
+        _LOGGER.info("Odace SFSP — désappariage en attente pour %s (%.0fs)", uuid, timeout)
+
+        async def _cancel_after_timeout() -> None:
+            await asyncio.sleep(timeout)
+            if uuid in self._pending_unpair:
+                self._pending_unpair.discard(uuid)
+                _LOGGER.info("Odace SFSP — désappariage annulé (timeout) pour %s", uuid)
+
+        self.hass.async_create_task(_cancel_after_timeout())
+
+    async def _async_unpair_and_remove(self, uuid: str) -> None:
+        """Envoie la trame pair (toggle désappairé) puis attend la confirmation (code 13) avant de retirer."""
+        uuid = uuid.lower()
+        await self.async_send_pair(uuid)
+        self._pending_unpair_confirm.add(uuid)
+        _LOGGER.info(
+            "Odace SFSP — trame pair envoyée pour %s, attente confirmation désappariage (code 13)", uuid
+        )
+
+        async def _remove_after_timeout() -> None:
+            await asyncio.sleep(15.0)
+            if uuid in self._pending_unpair_confirm:
+                self._pending_unpair_confirm.discard(uuid)
+                _LOGGER.warning(
+                    "Odace SFSP — pas de confirmation désappariage (code 13) pour %s après 15s,"
+                    " suppression forcée",
+                    uuid,
+                )
+                await self.async_remove_device(uuid)
+
+        self.hass.async_create_task(_remove_after_timeout())
 
     def was_commanded_recently(self, uuid: str, ac: str, window: float = 2.0) -> bool:
         """Anti-boucle : True si on vient d'envoyer cette commande pour ce uuid."""

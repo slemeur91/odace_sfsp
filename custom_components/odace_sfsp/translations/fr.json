@@ -4,7 +4,9 @@
       "user": {
         "title": "Odace SFSP — Mode d'envoi BLE",
         "description": "Choisissez comment les commandes BLE seront envoyées aux modules Schneider.",
-        "data": { "send_mode": "Mode d'envoi" }
+        "data": {
+          "send_mode": "Mode d'envoi"
+        }
       },
       "hci": {
         "title": "Contrôleur Bluetooth local",
@@ -24,7 +26,9 @@
       "mqtt_broker": {
         "title": "Configuration ESP32/MQTT",
         "description": "L'ESP32 doit publier sa MAC sur `{mac_topic}` au démarrage (découverte automatique à l'étape suivante, délai {timeout}s).",
-        "data": { "mqtt_topic": "Topic MQTT d'envoi des commandes" }
+        "data": {
+          "mqtt_topic": "Topic MQTT d'envoi des commandes"
+        }
       },
       "mqtt_mac": {
         "title": "Adresse MAC de l'ESP32",
@@ -49,7 +53,9 @@
     "step": {
       "init": {
         "title": "Gérer les modules Odace SFSP",
-        "data": { "action": "Action" }
+        "data": {
+          "action": "Action"
+        }
       },
       "network": {
         "title": "Configuration réseau",
@@ -61,7 +67,9 @@
       },
       "advanced": {
         "title": "Paramètres avancés",
-        "data": { "action": "Action" }
+        "data": {
+          "action": "Action"
+        }
       },
       "advanced_settings": {
         "title": "Clé Jeedom / MAC contrôleur",
@@ -91,7 +99,12 @@
           "mac": "Adresse MAC BLE du module (optionnel)"
         }
       },
-      "select_edit": { "title": "Choisir un module à modifier", "data": { "uuid": "Module" } },
+      "select_edit": {
+        "title": "Choisir un module à modifier",
+        "data": {
+          "uuid": "Module"
+        }
+      },
       "edit": {
         "title": "Modifier le module",
         "description": "UUID actuel : `{current_uuid}` — Équivalent étiquette : `{reversed_uuid}`\n\nChoisissez le format dans lequel vous saisissez le nouvel UUID.",
@@ -103,7 +116,12 @@
           "mac": "Adresse MAC BLE"
         }
       },
-      "select_remove": { "title": "Choisir un module à supprimer", "data": { "uuid": "Module" } }
+      "select_remove": {
+        "title": "Choisir un module à supprimer",
+        "data": {
+          "uuid": "Module"
+        }
+      }
     },
     "error": {
       "already_exists": "Un module avec cet UUID existe déjà",
@@ -112,10 +130,33 @@
     }
   },
   "services": {
-    "send_command": { "name": "Envoyer une commande", "description": "Envoie une trame BLE Odace SFSP" },
-    "start_learn": { "name": "Mode apprentissage", "description": "Active l'inclusion (60 s par défaut)" },
-    "add_device": { "name": "Ajouter un module", "description": "Ajoute manuellement un module" },
-    "remove_device": { "name": "Supprimer un module", "description": "Supprime un module" },
-    "bind_device": { "name": "Associer un module", "description": "Envoie la trame d'association BLE" }
+    "send_command": {
+      "name": "Envoyer une commande",
+      "description": "Envoie une trame BLE Odace SFSP"
+    },
+    "start_learn": {
+      "name": "Mode apprentissage",
+      "description": "Active l'inclusion (60 s par défaut)"
+    },
+    "add_device": {
+      "name": "Ajouter un module",
+      "description": "Ajoute manuellement un module"
+    },
+    "remove_device": {
+      "name": "Supprimer un module",
+      "description": "Supprime un module"
+    },
+    "bind_device": {
+      "name": "Associer un module",
+      "description": "Envoie la trame d'association BLE"
+    }
+  },
+  "entity": {
+    "button": {
+      "unpair": {
+        "name": "Désappairer et supprimer",
+        "description": "Appuyez sur ce bouton, puis appuyez sur le bouton physique du module dans les 60 secondes. Le module sera désappairé (confirmation par le code 13) puis supprimé de Home Assistant."
+      }
+    }
   }
 }

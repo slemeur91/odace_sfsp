@@ -70,7 +70,7 @@ def build_frame(device: Dict[str, Any], frame_type: str, jeedom_key: str, data: 
             else:
                 target_uuid = "FF" + target_uuid
         if "options" in data:
-            param = hex(100 - int(data["options"]))[2:]
+            param = format(int(data["options"]), '02x')
         payload = (
             GATEWAY["advertisement"]
             + UUID_CONTROLLER
