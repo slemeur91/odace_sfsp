@@ -124,7 +124,7 @@
       },
       "confirm_remove": {
         "title": "Supprimer {name}",
-        "description": "Comment voulez-vous supprimer le module **{name}** (`{uuid}`) ?",
+        "description": "Comment voulez-vous supprimer le module **{name}** (`{uuid}`) ?\n\n_Note : l'option « Désappairer » attend que vous appuyiez sur le bouton physique du module. La suppression dans Home Assistant n'aura lieu qu'une fois le désappariage confirmé par le module (code 13). Si le désappariage n'est pas confirmé dans les 15 secondes, la suppression est forcée._",
         "data": {
           "action": "Action"
         }

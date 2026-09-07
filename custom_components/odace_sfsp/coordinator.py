@@ -140,75 +140,69 @@ class OdaceSFSPCoordinator:
             )
 
     async def _resolve_hci_by_mac(self) -> None:
-        """Résout dynamiquement l'interface HCI si le dongle a démarré sur un hciX inattendu.
+        """Résout dynamiquement l'interface HCI via sysfs si le dongle est sur un hciX inattendu.
 
-        Stratégie :
-        1. Vérifier si l'interface configurée (hci_name) est une interface fantôme (MAC nulle).
-        2. Si oui, chercher parmi les adaptateurs connus de HA celui qui a une vraie MAC.
-        3. dongle_mac est utilisée uniquement comme indice de priorité si elle correspond
-           à un adaptateur réel — elle peut être une MAC d'encodage custom différente de la
-           MAC physique, auquel cas elle est ignorée pour la résolution.
+        Lit /sys/class/bluetooth/hciX/address pour chaque interface disponible.
+        Si l'interface configurée a une MAC nulle (interface fantôme Linux/BlueZ),
+        bascule sur la première interface réelle trouvée — en priorité celle dont
+        la MAC correspond à dongle_mac si c'est une vraie MAC physique.
 
         Cette méthode ne modifie pas dongle_mac (utilisée pour l'encodage CMAC des trames).
         """
-        _NULL_MAC = "00:00:00:00:00:00"
-
-        try:
-            adapters = await bluetooth.async_get_adapters(self.hass)
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.warning("_resolve_hci_by_mac : impossible de lire les adaptateurs BLE : %s", err)
-            return
-
-        # Trouver l'adaptateur actuellement configuré
-        configured = next((a for a in adapters if a.get("name") == self.hci_name), None)
-        if configured is None:
+        resolved = await self.hass.async_add_executor_job(self._find_real_hci)
+        if resolved:
             _LOGGER.warning(
-                "Odace SFSP — interface %s introuvable dans les adaptateurs HA"
-                " (adaptateurs : %s)",
-                self.hci_name, [a.get("name") for a in adapters],
+                "Odace SFSP — %s est une interface fantôme (MAC nulle) → basculement sur %s",
+                self.hci_name, resolved,
             )
-            return
-
-        configured_mac = configured.get("address", _NULL_MAC)
-        if configured_mac.upper() != _NULL_MAC:
-            # L'interface configurée a une vraie MAC → aucun problème
+            self.hci_name = resolved
+            self.hci_index = hci_index_from_name(resolved)
+        else:
             _LOGGER.debug(
-                "_resolve_hci_by_mac : %s confirmé avec MAC %s", self.hci_name, configured_mac
-            )
-            return
-
-        # Interface configurée = fantôme (MAC nulle) → chercher une interface réelle
-        real_adapters = [
-            a for a in adapters
-            if a.get("address", _NULL_MAC).upper() != _NULL_MAC
-        ]
-        if not real_adapters:
-            _LOGGER.warning(
-                "Odace SFSP — %s est une interface fantôme (MAC nulle) mais"
-                " aucun autre adaptateur BLE réel trouvé dans HA",
+                "_resolve_hci_by_mac : %s confirmé valide (ou aucune interface de remplacement trouvée)",
                 self.hci_name,
             )
-            return
 
-        # Si dongle_mac est une vraie MAC physique (pas custom), elle peut servir de priorité
-        priority = None
-        if self.dongle_mac.upper() != _NULL_MAC:
-            priority = next(
-                (a for a in real_adapters if a.get("address", "").upper() == self.dongle_mac.upper()),
-                None,
-            )
+    def _find_real_hci(self) -> str | None:
+        """Lecture sysfs (synchrone) — à exécuter dans un executor.
 
-        resolved_adapter = priority or real_adapters[0]
-        resolved_name = resolved_adapter.get("name", "")
-        resolved_mac = resolved_adapter.get("address", "")
+        Retourne le nom hciX d'une interface réelle si l'interface configurée est
+        fantôme, None si l'interface configurée est valide.
+        """
+        import glob  # noqa: PLC0415
 
-        _LOGGER.warning(
-            "Odace SFSP — %s est une interface fantôme (MAC nulle) →"
-            " basculement sur %s (MAC %s)",
-            self.hci_name, resolved_name, resolved_mac,
-        )
-        self.hci_name = resolved_name
-        self.hci_index = hci_index_from_name(resolved_name)
+        _NULL_MAC = "00:00:00:00:00:00"
+
+        # 1. Vérifier l'interface configurée
+        try:
+            with open(f"/sys/class/bluetooth/{self.hci_name}/address") as fh:
+                mac = fh.read().strip().upper()
+            if mac and mac != _NULL_MAC:
+                return None  # Interface configurée valide, rien à faire
+        except OSError:
+            pass  # Interface absente ou non lisible
+
+        # 2. Interface configurée fantôme ou absente → scanner toutes les interfaces
+        fallback: str | None = None
+        for path in sorted(glob.glob("/sys/class/bluetooth/hci*/address")):
+            try:
+                with open(path) as fh:
+                    mac = fh.read().strip().upper()
+                if not mac or mac == _NULL_MAC:
+                    continue
+                hci_name = path.split("/")[-2]
+                # Priorité : interface dont la MAC correspond à dongle_mac (MAC physique)
+                if (
+                    self.dongle_mac.upper() not in (_NULL_MAC, "")
+                    and mac == self.dongle_mac.upper()
+                ):
+                    return hci_name
+                if fallback is None:
+                    fallback = hci_name  # Première interface réelle, fallback
+            except OSError:
+                continue
+
+        return fallback
 
     async def async_stop(self) -> None:
         if self._unsub_bt is not None:
@@ -271,12 +265,27 @@ class OdaceSFSPCoordinator:
         if not self.devices[uuid].get("mac"):
             self.devices[uuid]["mac"] = service_info.address
 
-        # Confirmation de désappariage : le module diffuse code 13 (paired=unpaired)
-        if uuid in self._pending_unpair_confirm and result["data"].get("paired") == "unpaired":
-            self._pending_unpair_confirm.discard(uuid)
-            _LOGGER.info("Odace SFSP — désappariage confirmé (code 13) pour %s → suppression", uuid)
-            self.hass.async_create_task(self.async_remove_device(uuid))
-            return
+        # Suivi du désappariage en attente de confirmation
+        if uuid in self._pending_unpair_confirm:
+            paired_state = result["data"].get("paired")
+            if paired_state == "unpaired":
+                # Code 13 : module bien désappairé → suppression
+                self._pending_unpair_confirm.discard(uuid)
+                _LOGGER.info(
+                    "Odace SFSP — désappariage confirmé (code 13) pour %s → suppression", uuid
+                )
+                self.hass.async_create_task(self.async_remove_device(uuid))
+                return
+            if paired_state == "paired":
+                # Code 12 : la trame pair a rebasculé le module en appairé (état inverse)
+                # → envoyer une seconde trame pair pour repasser en désappairé
+                _LOGGER.info(
+                    "Odace SFSP — module %s est passé en appairé (code 12) au lieu de désappairé"
+                    " → envoi d'une seconde trame pair",
+                    uuid,
+                )
+                self.hass.async_create_task(self.async_send_pair(uuid))
+                return
 
         async_dispatcher_send(self.hass, SIGNAL_DEVICE_UPDATE.format(uuid=uuid), result)
 
@@ -308,7 +317,7 @@ class OdaceSFSPCoordinator:
         await self._async_persist()
         # Supprimer le device (et ses entités) du registre HA
         dev_reg = dr.async_get(self.hass)
-        device  = dev_reg.async_get_device(identifiers={(DOMAIN, uuid)})
+        device  = dev_reg.async_get_device_by_identifier((DOMAIN, uuid))
         if device:
             dev_reg.async_remove_device(device.id)
         async_dispatcher_send(self.hass, SIGNAL_DEVICES_CHANGED)
@@ -322,7 +331,7 @@ class OdaceSFSPCoordinator:
         # Mettre à jour le nom dans le registre HA si besoin
         if "name" in updates:
             dev_reg = dr.async_get(self.hass)
-            device  = dev_reg.async_get_device(identifiers={(DOMAIN, uuid)})
+            device  = dev_reg.async_get_device_by_identifier((DOMAIN, uuid))
             if device:
                 dev_reg.async_update_device(device.id, name=updates["name"])
         async_dispatcher_send(self.hass, SIGNAL_DEVICES_CHANGED)

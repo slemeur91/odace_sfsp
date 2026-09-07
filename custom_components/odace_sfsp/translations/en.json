@@ -124,7 +124,7 @@
       },
       "confirm_remove": {
         "title": "Remove {name}",
-        "description": "How do you want to remove module **{name}** (`{uuid}`)?",
+        "description": "How do you want to remove module **{name}** (`{uuid}`)?\n\n_Note: the \"Unpair\" option waits for you to press the physical button on the module. Home Assistant removal only happens once the module confirms unpairing (code 13). If unpairing is not confirmed within 15 seconds, removal is forced._",
         "data": {
           "action": "Action"
         }

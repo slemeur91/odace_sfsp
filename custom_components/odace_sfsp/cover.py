@@ -19,6 +19,7 @@ from homeassistant.components.cover import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -35,13 +36,18 @@ async def async_setup_entry(
     coord: OdaceSFSPCoordinator = hass.data[DOMAIN][entry.entry_id]
     added: set[str] = set()
 
+    # Résoudre l'ID du device gateway (pour via_device_id)
+    _dev_reg = dr.async_get(hass)
+    _gateway = _dev_reg.async_get_device_by_identifier((DOMAIN, entry.entry_id))
+    gateway_id: str | None = _gateway.id if _gateway else None
+
     @callback
     def _sync() -> None:
         new = []
         for uuid, dev in coord.devices.items():
             if dev.get("model") == "shutter" and uuid not in added:
                 added.add(uuid)
-                new.append(OdaceSFSPCover(coord, dev))
+                new.append(OdaceSFSPCover(coord, dev, gateway_id))
         if new:
             async_add_entities(new)
 
@@ -60,7 +66,12 @@ class OdaceSFSPCover(CoverEntity):
         | CoverEntityFeature.SET_POSITION
     )
 
-    def __init__(self, coordinator: OdaceSFSPCoordinator, device: Dict[str, Any]) -> None:
+    def __init__(
+        self,
+        coordinator: OdaceSFSPCoordinator,
+        device: Dict[str, Any],
+        gateway_id: str | None = None,
+    ) -> None:
         self._coord = coordinator
         self._uuid = device["uuid"].lower()
         self._attr_unique_id = f"odace_sfsp_shutter_{self._uuid}"
@@ -74,7 +85,7 @@ class OdaceSFSPCover(CoverEntity):
             name=self._attr_name,
             manufacturer="Schneider Electric",
             model="Odace SFSP Shutter",
-            via_device=(DOMAIN, coordinator.entry.entry_id),
+            via_device_id=gateway_id,
         )
 
     async def async_added_to_hass(self) -> None:
