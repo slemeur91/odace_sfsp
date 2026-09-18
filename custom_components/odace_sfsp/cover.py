@@ -38,7 +38,7 @@ async def async_setup_entry(
 
     # Résoudre l'ID du device gateway (pour via_device_id)
     _dev_reg = dr.async_get(hass)
-    _gateway = _dev_reg.async_get_device_by_identifier((DOMAIN, entry.entry_id))
+    _gateway = _dev_reg.async_get_device_by_identifier((DOMAIN, entry.entry_id), entry.entry_id)
     gateway_id: str | None = _gateway.id if _gateway else None
 
     @callback

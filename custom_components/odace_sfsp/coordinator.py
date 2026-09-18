@@ -317,7 +317,7 @@ class OdaceSFSPCoordinator:
         await self._async_persist()
         # Supprimer le device (et ses entités) du registre HA
         dev_reg = dr.async_get(self.hass)
-        device  = dev_reg.async_get_device_by_identifier((DOMAIN, uuid))
+        device  = dev_reg.async_get_device_by_identifier((DOMAIN, uuid), self.entry.entry_id)
         if device:
             dev_reg.async_remove_device(device.id)
         async_dispatcher_send(self.hass, SIGNAL_DEVICES_CHANGED)
@@ -331,7 +331,7 @@ class OdaceSFSPCoordinator:
         # Mettre à jour le nom dans le registre HA si besoin
         if "name" in updates:
             dev_reg = dr.async_get(self.hass)
-            device  = dev_reg.async_get_device_by_identifier((DOMAIN, uuid))
+            device  = dev_reg.async_get_device_by_identifier((DOMAIN, uuid), self.entry.entry_id)
             if device:
                 dev_reg.async_update_device(device.id, name=updates["name"])
         async_dispatcher_send(self.hass, SIGNAL_DEVICES_CHANGED)
