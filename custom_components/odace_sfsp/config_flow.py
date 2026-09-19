@@ -463,6 +463,7 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                 mac = await self.hass.async_add_executor_job(read_controller_mac, hci_name)
                 self.hass.config_entries.async_update_entry(
                     self.entry,
+                    title=f"Odace SFSP ({hci_name})",
                     data={**self.entry.data, CONF_HCI: hci_name, CONF_MAC: mac or "00:00:00:00:00:00"},
                 )
                 return self.async_create_entry(title="", data={})

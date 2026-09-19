@@ -140,65 +140,82 @@ class OdaceSFSPCoordinator:
             )
 
     async def _resolve_hci_by_mac(self) -> None:
-        """Résout dynamiquement l'interface HCI via sysfs si le dongle est sur un hciX inattendu.
+        """Résout dynamiquement l'interface HCI si le dongle est sur un hciX inattendu.
 
-        Lit /sys/class/bluetooth/hciX/address pour chaque interface disponible.
-        Si l'interface configurée a une MAC nulle (interface fantôme Linux/BlueZ),
-        bascule sur la première interface réelle trouvée — en priorité celle dont
-        la MAC correspond à dongle_mac si c'est une vraie MAC physique.
+        Teste via hcitool si l'interface configurée est opérationnelle.
+        Gère le cas Linux/BlueZ où hci0 a la même MAC que hci1 mais est DOWN
+        (interface fantôme avec MAC valide, pas uniquement MAC nulle).
 
         Cette méthode ne modifie pas dongle_mac (utilisée pour l'encodage CMAC des trames).
         """
         resolved = await self.hass.async_add_executor_job(self._find_real_hci)
         if resolved:
             _LOGGER.warning(
-                "Odace SFSP — %s est une interface fantôme (MAC nulle) → basculement sur %s",
+                "Odace SFSP — %s n'est pas opérationnelle (DOWN ou interface fantôme)"
+                " → basculement sur %s",
                 self.hci_name, resolved,
             )
             self.hci_name = resolved
             self.hci_index = hci_index_from_name(resolved)
         else:
             _LOGGER.debug(
-                "_resolve_hci_by_mac : %s confirmé valide (ou aucune interface de remplacement trouvée)",
+                "_resolve_hci_by_mac : %s confirmée opérationnelle",
                 self.hci_name,
             )
 
     def _find_real_hci(self) -> str | None:
-        """Lecture sysfs (synchrone) — à exécuter dans un executor.
+        """Test réel de l'interface HCI via hcitool (synchrone, executor).
 
-        Retourne le nom hciX d'une interface réelle si l'interface configurée est
-        fantôme, None si l'interface configurée est valide.
+        Contrairement à la lecture sysfs seule, cette méthode détecte les interfaces
+        qui ont une MAC valide en sysfs mais dont la radio est DOWN (Network is down).
+        C'est le cas typique du dongle USB qui s'enregistre sur hci1 mais crée aussi
+        une entrée hci0 fantôme avec la même MAC.
+
+        Retourne le nom hciX d'une interface opérationnelle alternative,
+        ou None si l'interface configurée répond correctement.
         """
         import glob  # noqa: PLC0415
+        import subprocess  # noqa: PLC0415
 
+        def _is_hci_operational(name: str) -> bool:
+            """Teste si hcitool répond sur cette interface (timeout 2 s)."""
+            try:
+                result = subprocess.run(
+                    ["hcitool", "-i", name, "dev"],
+                    capture_output=True,
+                    timeout=2,
+                )
+                return result.returncode == 0
+            except (OSError, subprocess.TimeoutExpired):
+                return False
+
+        # 1. Tester l'interface configurée
+        if _is_hci_operational(self.hci_name):
+            return None  # Interface configurée opérationnelle
+
+        # 2. L'interface configurée ne répond pas → chercher une alternative
         _NULL_MAC = "00:00:00:00:00:00"
-
-        # 1. Vérifier l'interface configurée
-        try:
-            with open(f"/sys/class/bluetooth/{self.hci_name}/address") as fh:
-                mac = fh.read().strip().upper()
-            if mac and mac != _NULL_MAC:
-                return None  # Interface configurée valide, rien à faire
-        except OSError:
-            pass  # Interface absente ou non lisible
-
-        # 2. Interface configurée fantôme ou absente → scanner toutes les interfaces
         fallback: str | None = None
+
         for path in sorted(glob.glob("/sys/class/bluetooth/hci*/address")):
             try:
+                hci_name = path.split("/")[-2]
+                if hci_name == self.hci_name:
+                    continue  # Déjà testé
                 with open(path) as fh:
                     mac = fh.read().strip().upper()
                 if not mac or mac == _NULL_MAC:
                     continue
-                hci_name = path.split("/")[-2]
-                # Priorité : interface dont la MAC correspond à dongle_mac (MAC physique)
+                if not _is_hci_operational(hci_name):
+                    continue
+                # Interface opérationnelle trouvée
                 if (
                     self.dongle_mac.upper() not in (_NULL_MAC, "")
                     and mac == self.dongle_mac.upper()
                 ):
-                    return hci_name
+                    return hci_name  # Correspond à dongle_mac → prioritaire
                 if fallback is None:
-                    fallback = hci_name  # Première interface réelle, fallback
+                    fallback = hci_name
             except OSError:
                 continue
 

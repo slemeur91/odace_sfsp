@@ -40,7 +40,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
     # Enregistrement explicite du device gateway pour que les entités enfants
-    # puissent y référencer leur via_device sans déclencher d'avertissement.
+    # puissent y référencer leur via_device_id sans déclencher d'avertissement.
     device_registry = dr.async_get(hass)
     device_registry.async_get_or_create(
         config_entry_id=entry.entry_id,
