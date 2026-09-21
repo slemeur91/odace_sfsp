@@ -45,7 +45,6 @@ MODEL_SWITCH = "switch"
 MODEL_SHUTTER = "shutter"
 MODEL_GENERIC = "generic"
 MODEL_PLUG = "plug"
-MODEL_DIMMER = "dimmer"
 MODEL_SCENE = "scene"
 
 SUPPORTED_MODELS = [
@@ -54,7 +53,6 @@ SUPPORTED_MODELS = [
     MODEL_SHUTTER,
     MODEL_GENERIC,
     MODEL_PLUG,
-    MODEL_DIMMER,
     MODEL_SCENE,
 ]
 
@@ -72,7 +70,6 @@ TYPES = {
     "generic": "9244",
     "switch": "8e44",
     "plug": "9044",
-    "dimmer": "9144",
     "gateway": "A244",
 }
 
@@ -97,7 +94,6 @@ CFTARGET = {
     "generic": "2F",
     "shutter": "3F",
     "plug": "4F",
-    "dimmer": "5F",
     "scene": "FF",
     "groupdcl": "1F",
     "groupshutter": "3F",

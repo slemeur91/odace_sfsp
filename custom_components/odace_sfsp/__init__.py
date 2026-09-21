@@ -87,6 +87,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_register(DOMAIN, "bind_device", _svc_bind_device)
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, "send_command"))
+    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, "start_learn"))
+    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, "add_device"))
+    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, "remove_device"))
+    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, "bind_device"))
     return True
 
 

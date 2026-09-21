@@ -50,9 +50,12 @@ def _random_counter() -> str:
 
 def build_frame(device: Dict[str, Any], frame_type: str, jeedom_key: str, data: Any = "") -> str:
     """Recrée la trame binaire avant chiffrement."""
+    model = device.get("model", "")
+    if model not in CFTARGET:
+        raise ValueError(f"Modèle inconnu '{model}' — modèles valides : {list(CFTARGET)}")
     param = "FF"
     target_uuid = device["uuid"]
-    cf_model = CFTARGET[device["model"]]
+    cf_model = CFTARGET[model]
     header = UNIQUE_HEADER + TYPES["gateway"] + HEADER_VV + HEADER_FS
 
     if frame_type == "pair":
@@ -60,16 +63,22 @@ def build_frame(device: Dict[str, Any], frame_type: str, jeedom_key: str, data: 
         payload = GATEWAY["binding"] + UUID_CONTROLLER + str(jeedom_key)
     else:
         data_ac = AC[data["ac"]]
-        if device["model"] == "scene":
+        if model == "scene":
             param = SCENES[device.get("type", "custom")]
-        elif device["model"].startswith("group"):
+        elif model.startswith("group"):
             param = "FB"
         else:
-            if device["model"] in UUID_FF_SUFFIX_MODELS:
+            if model in UUID_FF_SUFFIX_MODELS:
                 target_uuid = target_uuid + "FF"
             else:
                 target_uuid = "FF" + target_uuid
         if "options" in data:
+            if model == "scene":
+                _LOGGER.warning(
+                    "build_frame : 'options' (%s) écrase le param de scène dérivé du type '%s'"
+                    " — comportement probablement non intentionnel",
+                    data["options"], device.get("type", "custom"),
+                )
             param = format(int(data["options"]), '02x')
         payload = (
             GATEWAY["advertisement"]
@@ -119,7 +128,11 @@ def craft_payload(
     - Mode HCI  : MAC du dongle USB (lue depuis sysfs/hciconfig)
     - Mode ESP32 : MAC Bluetooth de l'ESP32 (saisie dans le config flow)
     """
-    frame = build_frame(device, frame_type, jeedom_key, data)
+    try:
+        frame = build_frame(device, frame_type, jeedom_key, data)
+    except ValueError as err:
+        _LOGGER.error("craft_payload : %s", err)
+        return ""
     buffer = _compute_buffer(dongle_mac, frame)
     if frame_type == "pair":
         key = UNIQUE_KEY.replace(" ", "").lower()
@@ -335,7 +348,7 @@ async def async_send_esphome_api(hass, entry_id: str, service_name: str, payload
         # côté HCI) : on rappelle le service à intervalle régulier pendant toute
         # la durée de la fenêtre, pour maximiser les chances que le module
         # (en scan passif) capte au moins une retransmission.
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         start = loop.time()
         sent = 0
         while True:

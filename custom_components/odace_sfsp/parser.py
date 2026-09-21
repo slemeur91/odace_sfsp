@@ -29,6 +29,19 @@ _LOGGER = logging.getLogger(__name__)
 _lastevent: Dict[str, str] = {}
 _lastdata: Dict[str, dict] = {}
 
+# Taille maximale des dicts de déduplication — évite la croissance illimitée
+# en cas d'exposition prolongée à des trames de nombreux UUIDs différents.
+_DEDUPE_MAX_SIZE = 200
+
+
+def _trim_dedupe() -> None:
+    """Éjecte la moitié la plus ancienne des entrées si la limite est atteinte."""
+    if len(_lastevent) > _DEDUPE_MAX_SIZE:
+        to_remove = list(_lastevent.keys())[: _DEDUPE_MAX_SIZE // 2]
+        for k in to_remove:
+            _lastevent.pop(k, None)
+            _lastdata.pop(k, None)
+
 
 def _reconstruct_full_trame(mfg_hex: str) -> str:
     """Recrée une trame au format ``0201061bffb602<mfg>`` compatible avec l'ancien parseur.
@@ -91,8 +104,6 @@ def parse_trame(trame: str, mac: str) -> Optional[Dict[str, Any]]:
             string = _parse_generic(trame, cf, uuid, string, result)
         elif dtype == "9044":
             string = _parse_plug(trame, cf, uuid, string, result)
-        elif dtype == "9144":
-            string = _parse_dimmer(trame, cf, uuid, string, result)
         elif dtype == "a244":
             # Trame émise par HA (type gateway/contrôleur) captée en retour par
             # le bluetooth_proxy ESPHome — boucle de feedback normale, ignorer
@@ -113,6 +124,7 @@ def parse_trame(trame: str, mac: str) -> Optional[Dict[str, Any]]:
         ):
             return None
         _lastdata[uuid] = dict(data)
+        _trim_dedupe()
 
         _LOGGER.debug(trame)
         _LOGGER.debug(string)
@@ -326,44 +338,6 @@ def _parse_plug(trame: str, cf: str, uuid: str, string: str, result: dict) -> st
             string += " unpaired"
         string = _parse_groups(trame, string, data, offset=36)
     elif cf == "41":
-        data["type"] = "binding"
-        string += " binding"
-    return string
-
-
-def _parse_dimmer(trame: str, cf: str, uuid: str, string: str, result: dict) -> str:
-    """Variateur Odace SFSP (type 9144) — même structure que DCL.
-
-    cf 50 = advertisement, cf 51 = binding.
-    """
-    result["model"] = "dimmer"
-    string += f"This is a Dimmer with UUID {uuid}"
-    data = result["data"]
-    if cf == "50":
-        data["type"] = "advertisement"
-        string += " advertisement"
-        data["firmware"] = trame[58:62]
-        state_code = trame[32:34]
-        if state_code == "01":
-            data["value"], data["label"] = "1", "Allumé"
-            string += " state is ON"
-        elif state_code == "00":
-            data["value"], data["label"] = "0", "Eteint"
-            string += " state is OFF"
-        elif state_code == "10":
-            data["paired"] = "denied"
-            string += " pairing denied"
-        elif state_code == "11":
-            data["paired"] = "ok"
-            string += " pairing ok"
-        elif state_code == "12":
-            data["paired"] = "paired"
-            string += " paired"
-        elif state_code == "13":
-            data["paired"] = "unpaired"
-            string += " unpaired"
-        string = _parse_groups(trame, string, data, offset=36)
-    elif cf == "51":
         data["type"] = "binding"
         string += " binding"
     return string

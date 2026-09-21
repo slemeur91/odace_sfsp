@@ -96,13 +96,25 @@ def _normalize_uuid(uuid_raw: str, fmt: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _scan_sysfs_adapters() -> Dict[str, str]:
+    """Énumère les interfaces HCI via sysfs uniquement (pas de subprocess).
+
+    Utilise une lecture directe de /sys/class/bluetooth/<hci>/address plutôt que
+    read_controller_mac, afin d'éviter le fallback hciconfig (subprocess.check_output
+    bloquant) qui n'est pas nécessaire pour alimenter un menu déroulant.
+    Si sysfs ne dispose pas de l'adresse, "00:00:00:00:00:00" est affiché.
+    """
     import os
     result: Dict[str, str] = {}
     try:
         for name in sorted(os.listdir("/sys/class/bluetooth/")):
-            if name.startswith("hci"):
-                address = read_controller_mac(name) or "00:00:00:00:00:00"
-                result[name] = f"{name} ({address})"
+            if not name.startswith("hci"):
+                continue
+            try:
+                with open(f"/sys/class/bluetooth/{name}/address") as fh:
+                    address = fh.read().strip().upper() or "00:00:00:00:00:00"
+            except OSError:
+                address = "00:00:00:00:00:00"
+            result[name] = f"{name} ({address})"
     except Exception:
         pass
     return result

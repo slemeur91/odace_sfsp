@@ -124,6 +124,7 @@ class OdaceSFSPCover(CoverEntity):
         elif label == "Fermeture":
             self._attr_is_closing = True
             self._attr_is_opening = False
+            self._attr_is_closed = False
             if position is not None:
                 self._attr_current_cover_position = int(position)
         elif label == "Arrêté":

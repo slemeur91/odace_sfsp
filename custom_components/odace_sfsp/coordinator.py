@@ -110,6 +110,8 @@ class OdaceSFSPCoordinator:
         self._pending_unpair: set = set()
         # UUIDs pour lesquels la trame pair a été envoyée, en attente du code 13 (confirmation désappariage)
         self._pending_unpair_confirm: set = set()
+        # Horodatage du dernier envoi de trame pair par UUID (anti-tempête re-pairing)
+        self._last_pair_sent: Dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -268,10 +270,17 @@ class OdaceSFSPCoordinator:
                         uuid,
                     )
                     self.hass.async_create_task(self._async_unpair_and_remove(uuid))
-                elif model in ("dcl", "shutter", "plug", "dimmer", "generic"):
+                elif model in ("dcl", "shutter", "plug", "generic"):
                     # Reset usine ou perte d'appairage → ré-appairage automatique
-                    _LOGGER.info("Re-binding connu %s → envoi pair", uuid)
-                    self.hass.async_create_task(self.async_send_pair(uuid))
+                    # Debounce : évite d'envoyer plusieurs trames pair si plusieurs
+                    # frames binding arrivent en rafale (bouton tenu, etc.)
+                    _now = time.time()
+                    if _now - self._last_pair_sent.get(uuid, 0.0) > 5.0:
+                        self._last_pair_sent[uuid] = _now
+                        _LOGGER.info("Re-binding connu %s → envoi pair", uuid)
+                        self.hass.async_create_task(self.async_send_pair(uuid))
+                    else:
+                        _LOGGER.debug("Re-binding %s ignoré (debounce 5s)", uuid)
             return
 
         # ---- Trames d'advertisement ----
@@ -318,7 +327,7 @@ class OdaceSFSPCoordinator:
             "model": model, "name": f"Odace SFSP {model} {uuid}",
         }
         async_dispatcher_send(self.hass, SIGNAL_DEVICES_CHANGED)
-        if model in ("dcl", "shutter", "plug", "dimmer", "generic"):
+        if model in ("dcl", "shutter", "plug", "generic"):
             self.hass.async_create_task(self.async_send_pair(uuid))
         self.hass.async_create_task(self._async_persist())
 
@@ -401,7 +410,7 @@ class OdaceSFSPCoordinator:
     async def async_send_pair(self, uuid: str) -> None:
         """Envoie la trame de pairing pour associer un périphérique commandable.
 
-        Applicable aux modèles : dcl, shutter, plug, dimmer, generic.
+        Applicable aux modèles : dcl, shutter, plug, generic.
         Les switches (réception seule) n'ont pas de mécanisme de pairing.
         """
         uuid   = uuid.lower()
@@ -413,6 +422,10 @@ class OdaceSFSPCoordinator:
             {"uuid": device["uuid"].upper(), "model": device["model"]},
             "pair", self.jeedom_key, self.dongle_mac,
         )
+        if not payload:
+            _LOGGER.error("async_send_pair: payload vide pour uuid=%s", uuid)
+            return
+        self._last_pair_sent[uuid] = time.time()
         await self._dispatch_send(payload)
         _LOGGER.info("Odace SFSP PAIR [%s] envoyé → uuid=%s", self.send_mode, uuid)
 
