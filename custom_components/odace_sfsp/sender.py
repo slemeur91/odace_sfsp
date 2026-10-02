@@ -162,64 +162,94 @@ def validate_payload(payload: str) -> bool:
 # Mode HCI — envoi via hcitool (dongle USB local)
 # ---------------------------------------------------------------------------
 
-async def async_send(hci_index: int, payload: str) -> bool:
-    """Envoie la trame via ``hcitool`` sur le contrôleur ``hciX``.
+# Set d'advertising étendu dédié (le set 0 appartient au noyau).
+_EXT_ADV_HANDLE = "03"
 
-    Après l'envoi, le scan passif est restauré explicitement au niveau HCI pour
-    resynchroniser l'état hardware avec BlueZ.
+
+async def _hcitool(hci_index: int, args: str) -> int | None:
+    """Exécute ``hcitool cmd`` et retourne le status HCI, ou None.
+
+    hcitool sort en 0 même si le contrôleur rejette la commande.
     """
-    if not validate_payload(payload):
-        return False
-    payload_spaced = " ".join(payload[i : i + 2] for i in range(0, len(payload), 2)).upper()
-    _LOGGER.info("Send to BLE [HCI hci%d]: %s", hci_index, payload_spaced)
+    cmd = f"hcitool -i hci{hci_index} cmd {args}"
+    proc = await asyncio.create_subprocess_shell(
+        cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    out, err = await proc.communicate()
+    if proc.returncode != 0:
+        _LOGGER.warning("hcitool failed (%s): %s", cmd, err.decode(errors="ignore"))
+        return None
+    # Command Complete : <ncmd> <opcode lo> <opcode hi> <status> ...
+    text = out.decode(errors="ignore")
+    event = text.split("> HCI Event:", 1)[-1].splitlines()[1:]
+    params = " ".join(event).split()
+    status = int(params[3], 16) if len(params) >= 4 else None
+    _LOGGER.debug("hcitool %s -> status %s", args[:14], status)
+    return status
+
+
+async def _send_extended(hci_index: int, payload_spaced: str) -> int | None:
+    """Émission via LE Extended Advertising (contrôleurs BT 5.x).
+
+    Une fois le noyau passé en commandes étendues, les commandes legacy sont
+    rejetées (Command Disallowed). Le PDU émis reste un ADV_NONCONN_IND legacy.
+    """
+    h = _EXT_ADV_HANDLE
+    # props 0x0010 (legacy non connectable), 100 ms, canaux 37/38/39, adresse publique, PHY 1M
+    status = await _hcitool(
+        hci_index,
+        f"0x08 0x0036 {h} 10 00 A0 00 00 A0 00 00 07 00 00 00 00 00 00 00 00 00 7F 01 00 01 00 00",
+    )
+    if status != 0:
+        return status
+    status = await _hcitool(hci_index, f"0x08 0x0037 {h} 03 01 1F {payload_spaced}")
+    if status != 0:
+        return status
+    status = await _hcitool(hci_index, f"0x08 0x0039 01 01 {h} 00 00 00")
+    if status != 0:
+        return status
+    await asyncio.sleep(0.5)
+    await _hcitool(hci_index, f"0x08 0x0039 00 01 {h} 00 00 00")
+    await _hcitool(hci_index, f"0x08 0x003C {h}")
+    return 0
+
+
+async def _send_legacy(hci_index: int, payload_spaced: str) -> None:
+    """Émission via les commandes LE legacy (contrôleurs BT 4.x)."""
     # Désactive le scan passif de BlueZ avant d'activer l'advertising.
     # Sur la plupart des chipsets BLE, scan et advertising sont mutuellement
     # exclusifs : si BlueZ maintient le scan actif, cmd 0x000a 01 peut être
     # ignoré ou produire une trame corrompue → CMAC invalide → module rejette.
-    pre_cmd = f"hcitool -i hci{hci_index} cmd 0x08 0x000c 00 00"
-    proc = await asyncio.create_subprocess_shell(
-        pre_cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
-    )
-    await proc.communicate()
+    await _hcitool(hci_index, "0x08 0x000c 00 00")
     await asyncio.sleep(0.05)  # laisse le contrôleur sortir du mode scan
 
-    cmds = [
-        f"hcitool -i hci{hci_index} cmd 0x08 0x0008 1F {payload_spaced}",
-        f"hcitool -i hci{hci_index} cmd 0x08 0x0006 A0 00 A0 00 03 00 00 00 00 00 00 00 00 07 00",
-        f"hcitool -i hci{hci_index} cmd 0x08 0x000a 01",
-    ]
-    for cmd in cmds:
-        proc = await asyncio.create_subprocess_shell(
-            cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
-        )
-        _, err = await proc.communicate()
-        if proc.returncode != 0:
-            _LOGGER.warning("hcitool failed (%s): %s", cmd, err.decode(errors="ignore"))
+    await _hcitool(hci_index, f"0x08 0x0008 1F {payload_spaced}")
+    await _hcitool(hci_index, "0x08 0x0006 A0 00 A0 00 03 00 00 00 00 00 00 00 00 07 00")
+    status = await _hcitool(hci_index, "0x08 0x000a 01")
+    if status not in (0, None):
+        _LOGGER.warning("Le contrôleur hci%d a refusé l'advertising legacy (status 0x%02x)", hci_index, status)
     await asyncio.sleep(0.5)
 
     # Désactive l'advertising
-    proc = await asyncio.create_subprocess_shell(
-        f"hcitool -i hci{hci_index} cmd 0x08 0x000a 00",
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    _, err = await proc.communicate()
-    if proc.returncode != 0:
-        _LOGGER.warning("hcitool disable adv failed: %s", err.decode(errors="ignore"))
+    await _hcitool(hci_index, "0x08 0x000a 00")
 
     # Restaure le scan passif LE
-    restore_cmds = [
-        f"hcitool -i hci{hci_index} cmd 0x08 0x000b 00 10 00 10 00 00 00",
-        f"hcitool -i hci{hci_index} cmd 0x08 0x000c 01 00",
-    ]
-    for cmd in restore_cmds:
-        proc = await asyncio.create_subprocess_shell(
-            cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
-        )
-        _, err = await proc.communicate()
-        if proc.returncode != 0:
-            _LOGGER.debug("hcitool scan restore failed (%s): %s", cmd, err.decode(errors="ignore"))
+    await _hcitool(hci_index, "0x08 0x000b 00 10 00 10 00 00 00")
+    await _hcitool(hci_index, "0x08 0x000c 01 00")
 
+
+async def async_send(hci_index: int, payload: str) -> bool:
+    """Envoie la trame via ``hcitool`` : advertising étendu, sinon legacy."""
+    if not validate_payload(payload):
+        return False
+    payload_spaced = " ".join(payload[i : i + 2] for i in range(0, len(payload), 2)).upper()
+    _LOGGER.info("Send to BLE [HCI hci%d]: %s", hci_index, payload_spaced)
+
+    status = await _send_extended(hci_index, payload_spaced)
+    if status == 0:
+        return True
+    _LOGGER.debug("Advertising étendu indisponible (status %s), envoi legacy", status)
+    await _send_legacy(hci_index, payload_spaced)
     return True
 
 
