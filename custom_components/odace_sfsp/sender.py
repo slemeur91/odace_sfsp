@@ -39,6 +39,24 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Verrous HCI — sérialise les séquences d'advertising par contrôleur
+# ---------------------------------------------------------------------------
+# La séquence complète (scan-off → set-adv-data → enable-adv → sleep(0.5s) →
+# disable-adv → restore-scan) dure ~0.6s et n'est pas réentrante sur le même
+# contrôleur BLE. Si deux turn_on arrivent simultanément (ex. "allumer toutes
+# les lumières de la pièce"), les deux coroutines concurrentes interleave leurs
+# commandes HCI, corrompant au moins une des trames → un module ne reçoit rien.
+# Le Lock garantit qu'une seule séquence s'exécute à la fois par hci_index.
+_hci_locks: dict[int, asyncio.Lock] = {}
+
+
+def _get_hci_lock(hci_index: int) -> asyncio.Lock:
+    """Retourne (en créant si besoin) le verrou pour hci<hci_index>."""
+    if hci_index not in _hci_locks:
+        _hci_locks[hci_index] = asyncio.Lock()
+    return _hci_locks[hci_index]
+
 
 # ---------------------------------------------------------------------------
 # Construction de trame (commune aux deux modes d'envoi)
@@ -241,27 +259,33 @@ async def _send_legacy(hci_index: int, payload_spaced: str) -> None:
 
 
 async def async_send(hci_index: int, payload: str) -> bool:
-    """Envoie la trame via ``hcitool`` : advertising étendu, sinon legacy."""
+    """Envoie la trame via ``hcitool`` : advertising étendu, sinon legacy.
+
+    Acquiert le verrou de l'interface hci<hci_index> avant d'exécuter la
+    séquence d'advertising, pour éviter l'interleaving de commandes HCI
+    lorsque plusieurs turn_on arrivent simultanément (ex. scène de pièce).
+    """
     if not validate_payload(payload):
         return False
     payload_spaced = " ".join(payload[i : i + 2] for i in range(0, len(payload), 2)).upper()
     _LOGGER.info("Send to BLE [HCI hci%d]: %s", hci_index, payload_spaced)
 
-    status = await _send_extended(hci_index, payload_spaced)
-    if status == 0:
-        return True
-    if status is None:
-        _LOGGER.warning(
-            "hci%d : impossible de lire le status HCI (output hcitool inattendu)"
-            " — tentative legacy",
-            hci_index,
-        )
-    else:
-        _LOGGER.debug(
-            "hci%d : advertising étendu refusé (status 0x%02x), tentative legacy",
-            hci_index, status,
-        )
-    await _send_legacy(hci_index, payload_spaced)
+    async with _get_hci_lock(hci_index):
+        status = await _send_extended(hci_index, payload_spaced)
+        if status == 0:
+            return True
+        if status is None:
+            _LOGGER.warning(
+                "hci%d : impossible de lire le status HCI (output hcitool inattendu)"
+                " — tentative legacy",
+                hci_index,
+            )
+        else:
+            _LOGGER.debug(
+                "hci%d : advertising étendu refusé (status 0x%02x), tentative legacy",
+                hci_index, status,
+            )
+        await _send_legacy(hci_index, payload_spaced)
     return True
 
 
