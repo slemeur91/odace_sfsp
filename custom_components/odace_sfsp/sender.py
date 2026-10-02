@@ -207,6 +207,8 @@ async def _send_extended(hci_index: int, payload_spaced: str) -> int | None:
         return status
     status = await _hcitool(hci_index, f"0x08 0x0039 01 01 {h} 00 00 00")
     if status != 0:
+        # Libère le handle même en cas d'échec pour ne pas laisser de set orphelin
+        await _hcitool(hci_index, f"0x08 0x003C {h}")
         return status
     await asyncio.sleep(0.5)
     await _hcitool(hci_index, f"0x08 0x0039 00 01 {h} 00 00 00")
@@ -248,7 +250,17 @@ async def async_send(hci_index: int, payload: str) -> bool:
     status = await _send_extended(hci_index, payload_spaced)
     if status == 0:
         return True
-    _LOGGER.debug("Advertising étendu indisponible (status %s), envoi legacy", status)
+    if status is None:
+        _LOGGER.warning(
+            "hci%d : impossible de lire le status HCI (output hcitool inattendu)"
+            " — tentative legacy",
+            hci_index,
+        )
+    else:
+        _LOGGER.debug(
+            "hci%d : advertising étendu refusé (status 0x%02x), tentative legacy",
+            hci_index, status,
+        )
     await _send_legacy(hci_index, payload_spaced)
     return True
 
