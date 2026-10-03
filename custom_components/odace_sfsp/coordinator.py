@@ -147,18 +147,29 @@ class OdaceSFSPCoordinator:
         Teste via hcitool si l'interface configurée est opérationnelle.
         Gère le cas Linux/BlueZ où hci0 a la même MAC que hci1 mais est DOWN
         (interface fantôme avec MAC valide, pas uniquement MAC nulle).
+        Gère aussi le cas où l'interface a disparu en cours de session (re-numérotation
+        kernel lors d'un restart BlueZ ou d'un événement USB).
+
+        Met à jour CONF_HCI dans la config entry quand une interface de remplacement
+        est trouvée, afin que l'UI et les redémarrages futurs utilisent le bon nom.
 
         Cette méthode ne modifie pas dongle_mac (utilisée pour l'encodage CMAC des trames).
         """
         resolved = await self.hass.async_add_executor_job(self._find_real_hci)
         if resolved:
             _LOGGER.warning(
-                "Odace SFSP — %s n'est pas opérationnelle (DOWN ou interface fantôme)"
+                "Odace SFSP — %s n'est pas opérationnelle (DOWN ou disparue)"
                 " → basculement sur %s",
                 self.hci_name, resolved,
             )
             self.hci_name = resolved
             self.hci_index = hci_index_from_name(resolved)
+            # Persiste le nouveau nom dans la config entry — l'UI et les
+            # redémarrages futurs utiliseront directement la bonne interface.
+            self.hass.config_entries.async_update_entry(
+                self.entry,
+                data={**self.entry.data, CONF_HCI: resolved},
+            )
         else:
             _LOGGER.debug(
                 "_resolve_hci_by_mac : %s confirmée opérationnelle",
@@ -376,6 +387,18 @@ class OdaceSFSPCoordinator:
         elif self.send_mode == SEND_MODE_ESPHOME_API:
             await async_send_esphome_api(self.hass, self.esphome_entry_id, self.esphome_service, payload)
         else:
+            # Avant chaque envoi HCI, vérifier que l'interface existe encore dans
+            # sysfs.  Le kernel Linux peut re-numéroter l'adaptateur BT (ex. hci1 →
+            # hci0) lors d'un restart BlueZ ou d'un événement USB, sans que HA ne
+            # soit relancé.  Détection légère (stat sysfs) et re-résolution si
+            # besoin, pour éviter les "Invalid device: No such device" silencieux.
+            import os  # noqa: PLC0415
+            if not os.path.exists(f"/sys/class/bluetooth/{self.hci_name}"):
+                _LOGGER.warning(
+                    "Odace SFSP — %s n'est plus présente dans sysfs, re-résolution...",
+                    self.hci_name,
+                )
+                await self._resolve_hci_by_mac()
             await hci_send(self.hci_index, payload)
 
     async def async_send_command(self, uuid: str, ac: str, options: Optional[int] = None) -> None:
