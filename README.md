@@ -4,6 +4,8 @@
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=flat-square)](https://github.com/hacs/integration)
 [![Maintainers](https://img.shields.io/badge/maintainers-@slemeur91-blue.svg?style=flat-square)](#)
 
+🇬🇧 [English version](README_EN.md)
+
 Cette intégration concerne le portage du plugin Jeedom `beagle` vers Home Assistant.
 
 > [!NOTE]
@@ -98,7 +100,9 @@ Depuis le menu **Configurer** de l'intégration il est également possible de :
 
 - **Supprimer un module** : retire le module de l'intégration et supprime l'entité associée.
 
-![Suppression d'un module](images/menu-suppression-module.png)
+![Suppression d'un module étape 1](images/menu-suppression-module-1.png)
+
+![Suppression d'un module étape 2](images/menu-suppression-module-2.png)
 
 ### Modification du contrôleur Bluetooth
 
