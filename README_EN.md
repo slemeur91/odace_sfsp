@@ -4,16 +4,15 @@
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=flat-square)](https://github.com/hacs/integration)
 [![Maintainers](https://img.shields.io/badge/maintainers-@slemeur91-blue.svg?style=flat-square)](#)
 
-🇫🇷 [Version française](README.md)
+🇫🇷 [Version française](README.md) · 📖 [Wiki](https://github.com/slemeur91/odace_sfsp/wiki)
 
 This integration is a port of the Jeedom `beagle` plugin to Home Assistant.
 
 > [!NOTE]
-> Many thanks to **@rommess**, who spent a lot of time improving the integration:
-> - Added support for the generic module
-> - Added module pairing management
-> - Added support for a Bluetooth controller plugged into PROXMOX with a Home Assistant VM
-> - Added support for a Bluetooth controller connected through ESPHome
+> Many thanks to the contributors:
+> - **@rommess** — testing of the `generic` module support, module pairing and the PROXMOX and ESPHome Bluetooth controllers
+> - **@NeySlim** — PR adding Bluetooth 5 support
+> - **@PinPinLeLapin31** — testing of the shutter module support, module unpairing and the `hci` index changing randomly when Home Assistant restarts
 
 ## Supported modules
 
@@ -62,35 +61,41 @@ These articles (in French) explain how to install and configure the modules unde
 
 During the initial setup, the integration asks which protocol to use to talk to the Bluetooth controller:
 
-![Bluetooth controller selection menu](images/menu-ajout-controleur.png)
+<img src="images/menu-ajout-controleur.png" alt="Bluetooth controller selection menu" width="480">
 
 - **HCI**: a Bluetooth controller plugged directly into the machine hosting Home Assistant (Raspberry Pi, NUC, etc.) or passed through over USB to a VM (PROXMOX for example). Home Assistant automatically detects the available adapters (typically `hci0`). This is the simplest and most reliable mode.
 
-![Adding an HCI Bluetooth controller, step 1](images/ajout-controleur-hci-1.png)
-
-![Adding an HCI Bluetooth controller, step 2](images/ajout-controleur-hci-2.png)
+<p>
+  <img src="images/ajout-controleur-hci-1.png" alt="Adding an HCI Bluetooth controller, step 1" width="49%" align="top">
+  <img src="images/ajout-controleur-hci-2.png" alt="Adding an HCI Bluetooth controller, step 2" width="49%" align="top">
+</p>
 
 - **ESPHome**: a remote Bluetooth controller driven by an ESP32 flashed with ESPHome. This mode is useful to extend the range by placing the ESP32 close to the Odace modules. See the [ESPHome configuration](#esphome-configuration) section for the build script.
 
-![Adding an ESPHome Bluetooth controller, step 1](images/ajout-controleur-esphome-1.png)
-
-![Adding an ESPHome Bluetooth controller, step 2](images/ajout-controleur-esphome-2.png)
+<p>
+  <img src="images/ajout-controleur-esphome-1.png" alt="Adding an ESPHome Bluetooth controller, step 1" width="49%" align="top">
+  <img src="images/ajout-controleur-esphome-2.png" alt="Adding an ESPHome Bluetooth controller, step 2" width="49%" align="top">
+</p>
 
 ### Module management menu
 
 From **Settings → Devices & services → Schneider Odace SFSP**, click **Configure** to open the main module management menu. This menu offers the following actions: add a module, edit a module, remove a module, as well as the advanced settings and the Bluetooth controller change.
 
-![Configure menu](images/menu-configuration.png)
+<img src="images/menu-configuration.png" alt="Configure menu" width="480">
 
 ### Adding modules — Pairing
 
 An Odace SFSP module is paired in learning mode:
 
 1. Press the module once to put it in learning mode. It stays in this state for 60 s (blinking red and green).
-2. From the **Configure** menu, choose **Add a module**. The integration switches to learning mode (configurable timeout, 60 s by default).
-3. The discovered module appears with its UUID. Enter a name, check the detected type (`switch`, `dcl`, `generic`, etc.) and confirm.
+2. Within the next 60 s, open the **Configure** menu and choose **Add a module**. The screen lists the modules that announced themselves during the last minute, so press the module **before** opening it. If the list is empty, close the screen, press the module again and reopen it.
+3. Select the detected module, shown with its UUID and type. Enter a name, check the type (`switch`, `dcl`, `generic`, etc.) and confirm.
 
-![Add a module menu](images/menu-ajout-module.png)
+For controllable modules (`dcl`, `generic`, `shutter`, `plug`), the pairing frame is sent automatically as long as the module is still blinking. If the delay has elapsed, press the module again: the pairing frame is then sent again.
+
+A module can also be added without learning mode, by choosing **Saisir manuellement** (manual entry) and typing its UUID (logs/Jeedom format, or module label format).
+
+<img src="images/menu-ajout-module.png" alt="Add a module menu" width="480">
 
 ### Editing and removing a module
 
@@ -98,15 +103,17 @@ From the integration's **Configure** menu you can also:
 
 - **Edit a module**: change its name or its type. If the type changes (for example a DCL reclassified as `switch`), the previous entity is removed and a new entity of the right domain is created — no orphan entity is left behind.
 
-![Editing a module, step 1](images/menu-modification-module-1.png)
-
-![Editing a module, step 2](images/menu-modification-module-2.png)
+<p>
+  <img src="images/menu-modification-module-1.png" alt="Editing a module, step 1" width="49%" align="top">
+  <img src="images/menu-modification-module-2.png" alt="Editing a module, step 2" width="49%" align="top">
+</p>
 
 - **Remove a module**: removes the module from the integration and deletes the associated entity.
 
-![Removing a module, step 1](images/menu-suppression-module-1.png)
-
-![Removing a module, step 2](images/menu-suppression-module-2.png)
+<p>
+  <img src="images/menu-suppression-module-1.png" alt="Removing a module, step 1" width="49%" align="top">
+  <img src="images/menu-suppression-module-2.png" alt="Removing a module, step 2" width="49%" align="top">
+</p>
 
 ### Changing the Bluetooth controller
 
@@ -116,7 +123,7 @@ If the Bluetooth controller is replaced, its MAC address can be updated in the i
 
 The **Advanced settings** menu offers two options:
 
-![Advanced settings menu](images/menu-parametre-avance.png)
+<img src="images/menu-parametre-avance.png" alt="Advanced settings menu" width="480">
 
 **1. Jeedom key and Bluetooth controller MAC**
 
@@ -125,22 +132,27 @@ Lets you view or change the two key elements inherited from Jeedom:
 - The **JEEDOM_KEY** is the encryption key used to sign the BLE frames sent to the Odace modules. It is specific to each installation and can be retrieved from the Jeedom logs.
 - The **Bluetooth controller MAC address** is the identifier used when pairing the modules. The MAC address of the original Jeedom Bluetooth controller can be reused with another physical adapter — this is what makes it possible to migrate an existing Jeedom installation to Home Assistant without pairing the modules again.
 
-![Jeedom key and Bluetooth controller MAC](images/menu-cle-jeedom-mac.png)
+<img src="images/menu-cle-jeedom-mac.png" alt="Jeedom key and Bluetooth controller MAC" width="480">
 
 **2. Export / Import of the module configuration**
 
-Lets you back up or restore the full list of paired modules in JSON or YAML format. Useful to migrate the integration to a new Home Assistant instance or to pre-fill the modules without going through learning mode again.
+Lets you back up or restore the full list of paired modules in JSON format. Useful to migrate the integration to a new Home Assistant instance or to pre-fill the modules without going through learning mode again.
+
+- **Export**: the field contains the current list, one line per module, ready to copy.
+- **Import**: paste either those lines as they are, or a complete JSON object wrapped in braces. UUIDs already present are skipped, as are lines with an invalid UUID or type.
+
+Importing creates the entities without sending a pairing frame: it suits modules already paired with the configured key and MAC.
 
 Format example:
 
-```yaml
+```json
 "943A00": {"uuid": "943A00", "mac": "60:C0:BF:30:2B:16", "model": "switch", "name": "Interrupteur de l'Armoire de toilette de la Salle de bain"},
 "123B00": {"uuid": "123B00", "mac": "60:C0:BF:30:2B:75", "model": "switch", "name": "Interrupteur du Plafonnier de la Salle de bain"},
 "BF3A00": {"uuid": "BF3A00", "mac": "60:C0:BF:30:2E:39", "model": "switch", "name": "Interrupteur de l'Armoire de toilette de la Salle d'eau"},
 "FF3A00": {"uuid": "FF3A00", "mac": "60:C0:BF:30:2B:60", "model": "switch", "name": "Interrupteur du Plafonnier de la Salle d'eau"}
 ```
 
-![Export / Import of the configuration](images/menu-export-import.png)
+<img src="images/menu-export-import.png" alt="Export / Import of the configuration" width="480">
 
 ### ESPHome configuration
 

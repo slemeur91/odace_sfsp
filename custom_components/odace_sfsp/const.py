@@ -98,7 +98,6 @@ CFTARGET = {
     "groupdcl": "1F",
     "groupshutter": "3F",
     "groupplug": "4F",
-    "groupdimmer": "5F",
 }
 
 GATEWAY = {
