@@ -25,10 +25,10 @@ from homeassistant.components.bluetooth import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.storage import Store
 
-from .parser import parse_manufacturer_data
+from .parser import forget_dedupe, parse_manufacturer_data
 from .sender import (
     async_send as hci_send,
     async_send_esphome_api,
@@ -37,6 +37,7 @@ from .sender import (
     hci_index_from_name,
 )
 from .const import (
+    CONF_ADAPTER_MAC,
     CONF_DEVICES,
     CONF_ESPHOME_ENTRY_ID,
     CONF_ESPHOME_SERVICE,
@@ -58,7 +59,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-STORAGE_VERSION = 1
+_NULL_MAC = "00:00:00:00:00:00"
 
 # Durée pendant laquelle une trame binding est mémorisée en attente (secondes).
 # Si start_learn est appelé dans cette fenêtre, le périphérique est enregistré
@@ -81,7 +82,11 @@ class OdaceSFSPCoordinator:
         self.send_mode: str  = entry.data.get(CONF_SEND_MODE, SEND_MODE_HCI)
         self.dongle_mac: str = entry.data.get(CONF_MAC, "00:00:00:00:00:00")
         self.jeedom_key: str = entry.data.get(CONF_JEEDOM_KEY, "")
-        self.devices: Dict[str, Dict[str, Any]] = dict(entry.data.get(CONF_DEVICES, {}))
+        # Copie indépendante : entry.data ne doit jamais être modifié en place, sinon
+        # async_update_entry ne voit aucune différence et n'écrit rien sur disque.
+        self.devices: Dict[str, Dict[str, Any]] = {
+            uid: dict(dev) for uid, dev in entry.data.get(CONF_DEVICES, {}).items()
+        }
 
         # Mode HCI — hci_name/hci_index ne sont pertinents qu'en SEND_MODE_HCI
         if self.send_mode == SEND_MODE_HCI:
@@ -90,6 +95,8 @@ class OdaceSFSPCoordinator:
         else:
             self.hci_name  = ""
             self.hci_index = 0
+        # MAC physique de l'adaptateur (distincte de dongle_mac, qui signe les trames)
+        self.adapter_mac: str = entry.data.get(CONF_ADAPTER_MAC, "")
 
         # Mode MQTT
         self.mqtt_topic: str = entry.data.get(CONF_MQTT_TOPIC, DEFAULT_MQTT_TOPIC)
@@ -101,7 +108,6 @@ class OdaceSFSPCoordinator:
         self.learn_mode: bool = False
         self._learn_expires: float = 0
         self._unsub_bt = None
-        self._store = Store(hass, STORAGE_VERSION, f"{DOMAIN}_{entry.entry_id}")
         # Dernier ordre envoyé — protection anti-boucle advertising
         self._last_command: Dict[str, Dict[str, Any]] = {}
         # Trames binding reçues hors mode apprentissage (mémorisées _PENDING_BINDING_TTL s)
@@ -153,10 +159,21 @@ class OdaceSFSPCoordinator:
         Met à jour CONF_HCI dans la config entry quand une interface de remplacement
         est trouvée, afin que l'UI et les redémarrages futurs utilisent le bon nom.
 
-        Cette méthode ne modifie pas dongle_mac (utilisée pour l'encodage CMAC des trames).
+        L'adaptateur est reconnu par sa MAC physique (CONF_ADAPTER_MAC), mémorisée
+        la première fois que l'interface configurée répond. Cette méthode ne modifie
+        pas dongle_mac (utilisée pour l'encodage CMAC des trames).
         """
-        resolved = await self.hass.async_add_executor_job(self._find_real_hci)
-        if resolved:
+        resolved, mac = await self.hass.async_add_executor_job(self._find_real_hci)
+        if resolved is None:
+            _LOGGER.error(
+                "Odace SFSP — %s ne répond pas et aucune autre interface Bluetooth"
+                " opérationnelle n'a été trouvée",
+                self.hci_name,
+            )
+            return
+
+        updates: Dict[str, Any] = {}
+        if resolved != self.hci_name:
             _LOGGER.warning(
                 "Odace SFSP — %s n'est pas opérationnelle (DOWN ou disparue)"
                 " → basculement sur %s",
@@ -166,17 +183,23 @@ class OdaceSFSPCoordinator:
             self.hci_index = hci_index_from_name(resolved)
             # Persiste le nouveau nom dans la config entry — l'UI et les
             # redémarrages futurs utiliseront directement la bonne interface.
-            self.hass.config_entries.async_update_entry(
-                self.entry,
-                data={**self.entry.data, CONF_HCI: resolved},
-            )
+            updates[CONF_HCI] = resolved
         else:
             _LOGGER.debug(
                 "_resolve_hci_by_mac : %s confirmée opérationnelle",
                 self.hci_name,
             )
+            # Première résolution réussie : mémoriser la MAC physique de l'adaptateur
+            if not self.adapter_mac and mac:
+                self.adapter_mac = mac
+                updates[CONF_ADAPTER_MAC] = mac
 
-    def _find_real_hci(self) -> str | None:
+        if updates:
+            self.hass.config_entries.async_update_entry(
+                self.entry, data={**self.entry.data, **updates},
+            )
+
+    def _find_real_hci(self) -> tuple[str | None, str]:
         """Test réel de l'interface HCI via hcitool (synchrone, executor).
 
         Contrairement à la lecture sysfs seule, cette méthode détecte les interfaces
@@ -184,8 +207,10 @@ class OdaceSFSPCoordinator:
         C'est le cas typique du dongle USB qui s'enregistre sur hci1 mais crée aussi
         une entrée hci0 fantôme avec la même MAC.
 
-        Retourne le nom hciX d'une interface opérationnelle alternative,
-        ou None si l'interface configurée répond correctement.
+        Retourne ``(nom, mac)`` :
+        - l'interface configurée si elle répond ;
+        - sinon une interface opérationnelle de remplacement ;
+        - ``(None, "")`` si aucune interface ne répond.
         """
         import glob  # noqa: PLC0415
         import subprocess  # noqa: PLC0415
@@ -202,35 +227,35 @@ class OdaceSFSPCoordinator:
             except (OSError, subprocess.TimeoutExpired):
                 return False
 
+        def _sysfs_mac(name: str) -> str:
+            try:
+                with open(f"/sys/class/bluetooth/{name}/address") as fh:
+                    mac = fh.read().strip().upper()
+            except OSError:
+                return ""
+            return "" if mac == _NULL_MAC else mac
+
         # 1. Tester l'interface configurée
         if _is_hci_operational(self.hci_name):
-            return None  # Interface configurée opérationnelle
+            return self.hci_name, _sysfs_mac(self.hci_name)
 
-        # 2. L'interface configurée ne répond pas → chercher une alternative
-        _NULL_MAC = "00:00:00:00:00:00"
-        fallback: str | None = None
+        # 2. L'interface configurée ne répond pas → chercher une alternative.
+        # MAC de référence : celle de l'adaptateur physique si elle est connue,
+        # sinon la MAC de signature (identique sur une installation sans migration).
+        wanted = (self.adapter_mac or self.dongle_mac or "").upper()
+        fallback: tuple[str | None, str] = (None, "")
 
         for path in sorted(glob.glob("/sys/class/bluetooth/hci*/address")):
-            try:
-                hci_name = path.split("/")[-2]
-                if hci_name == self.hci_name:
-                    continue  # Déjà testé
-                with open(path) as fh:
-                    mac = fh.read().strip().upper()
-                if not mac or mac == _NULL_MAC:
-                    continue
-                if not _is_hci_operational(hci_name):
-                    continue
-                # Interface opérationnelle trouvée
-                if (
-                    self.dongle_mac.upper() not in (_NULL_MAC, "")
-                    and mac == self.dongle_mac.upper()
-                ):
-                    return hci_name  # Correspond à dongle_mac → prioritaire
-                if fallback is None:
-                    fallback = hci_name
-            except OSError:
+            hci_name = path.split("/")[-2]
+            if hci_name == self.hci_name:
+                continue  # Déjà testé
+            mac = _sysfs_mac(hci_name)
+            if not mac or not _is_hci_operational(hci_name):
                 continue
+            if wanted not in ("", _NULL_MAC) and mac == wanted:
+                return hci_name, mac  # Même adaptateur physique → prioritaire
+            if fallback[0] is None:
+                fallback = (hci_name, mac)
 
         return fallback
 
@@ -373,40 +398,60 @@ class OdaceSFSPCoordinator:
                 dev_reg.async_update_device(device.id, name=updates["name"])
         async_dispatcher_send(self.hass, SIGNAL_DEVICES_CHANGED)
 
+    async def async_add_devices(self, devices: list[Dict[str, Any]]) -> None:
+        """Ajoute plusieurs modules : une seule persistance et un seul signal."""
+        for device in devices:
+            uuid = device["uuid"].lower()
+            self.devices[uuid] = {**device, "uuid": uuid}
+        await self._async_persist()
+        async_dispatcher_send(self.hass, SIGNAL_DEVICES_CHANGED)
+
     async def _async_persist(self) -> None:
-        new_data = {**self.entry.data, CONF_DEVICES: self.devices}
+        # Copie : entry.data doit recevoir un objet distinct de self.devices, sinon
+        # les modifications suivantes seraient faites « en place » et HA, ne voyant
+        # aucune différence, ne les écrirait pas sur disque.
+        devices = {uid: dict(dev) for uid, dev in self.devices.items()}
+        new_data = {**self.entry.data, CONF_DEVICES: devices}
         self.hass.config_entries.async_update_entry(self.entry, data=new_data)
 
     # ------------------------------------------------------------------
     # Send — aiguillage HCI ou ESP32/MQTT
     # ------------------------------------------------------------------
-    async def _dispatch_send(self, payload: str) -> None:
-        """Envoie le payload via le mode configuré."""
+    async def _dispatch_send(self, payload: str) -> bool:
+        """Envoie le payload via le mode configuré. Retourne False si l'envoi a échoué."""
+        if not payload:
+            return False
         if self.send_mode == SEND_MODE_MQTT:
-            await async_send_mqtt(self.hass, self.mqtt_topic, payload)
-        elif self.send_mode == SEND_MODE_ESPHOME_API:
-            await async_send_esphome_api(self.hass, self.esphome_entry_id, self.esphome_service, payload)
-        else:
-            # Avant chaque envoi HCI, vérifier que l'interface existe encore dans
-            # sysfs.  Le kernel Linux peut re-numéroter l'adaptateur BT (ex. hci1 →
-            # hci0) lors d'un restart BlueZ ou d'un événement USB, sans que HA ne
-            # soit relancé.  Détection légère (stat sysfs) et re-résolution si
-            # besoin, pour éviter les "Invalid device: No such device" silencieux.
-            import os  # noqa: PLC0415
-            if not os.path.exists(f"/sys/class/bluetooth/{self.hci_name}"):
-                _LOGGER.warning(
-                    "Odace SFSP — %s n'est plus présente dans sysfs, re-résolution...",
-                    self.hci_name,
-                )
-                await self._resolve_hci_by_mac()
-            await hci_send(self.hci_index, payload)
+            return await async_send_mqtt(self.hass, self.mqtt_topic, payload)
+        if self.send_mode == SEND_MODE_ESPHOME_API:
+            return await async_send_esphome_api(
+                self.hass, self.esphome_entry_id, self.esphome_service, payload
+            )
+        # Avant chaque envoi HCI, vérifier que l'interface existe encore dans
+        # sysfs.  Le kernel Linux peut re-numéroter l'adaptateur BT (ex. hci1 →
+        # hci0) lors d'un restart BlueZ ou d'un événement USB, sans que HA ne
+        # soit relancé.  Détection légère (stat sysfs) et re-résolution si
+        # besoin, pour éviter les "Invalid device: No such device" silencieux.
+        import os  # noqa: PLC0415
+        if not os.path.exists(f"/sys/class/bluetooth/{self.hci_name}"):
+            _LOGGER.warning(
+                "Odace SFSP — %s n'est plus présente dans sysfs, re-résolution...",
+                self.hci_name,
+            )
+            await self._resolve_hci_by_mac()
+        return await hci_send(self.hci_index, payload)
 
     async def async_send_command(self, uuid: str, ac: str, options: Optional[int] = None) -> None:
+        """Envoie une commande à un module.
+
+        Lève HomeAssistantError si le module est inconnu ou si la trame n'a pas pu
+        être émise : l'appelant (entité, service) ne doit alors pas considérer la
+        commande comme partie.
+        """
         uuid   = uuid.lower()
         device = self.devices.get(uuid)
         if device is None:
-            _LOGGER.error("Unknown device %s", uuid)
-            return
+            raise HomeAssistantError(f"Odace SFSP : module {uuid} inconnu")
         data: Dict[str, Any] = {"ac": ac}
         if options is not None:
             data["options"] = options
@@ -426,8 +471,16 @@ class OdaceSFSPCoordinator:
             device_for_payload,
             "advertisement", self.jeedom_key, self.dongle_mac, data,
         )
+        if not await self._dispatch_send(payload):
+            raise HomeAssistantError(
+                f"Odace SFSP : la commande {ac} n'a pas pu être envoyée au module {uuid}"
+                " (voir les journaux)"
+            )
         self._last_command[uuid] = {"ac": ac, "ts": time.time()}
-        await self._dispatch_send(payload)
+        # La prochaine annonce du module doit passer le filtre anti-doublon, même si
+        # elle est identique à la précédente : c'est elle qui confirme (ou dément)
+        # l'état affiché de façon optimiste par l'entité.
+        forget_dedupe(uuid)
         _LOGGER.info("Odace SFSP TX [%s] uuid=%s ac=%s options=%s", self.send_mode, uuid, ac, options)
 
     async def async_send_pair(self, uuid: str) -> None:
@@ -449,7 +502,9 @@ class OdaceSFSPCoordinator:
             _LOGGER.error("async_send_pair: payload vide pour uuid=%s", uuid)
             return
         self._last_pair_sent[uuid] = time.time()
-        await self._dispatch_send(payload)
+        if not await self._dispatch_send(payload):
+            _LOGGER.error("Odace SFSP PAIR [%s] : échec de l'envoi → uuid=%s", self.send_mode, uuid)
+            return
         _LOGGER.info("Odace SFSP PAIR [%s] envoyé → uuid=%s", self.send_mode, uuid)
 
     async def start_unpair(self, uuid: str, timeout: float = 60.0) -> None:

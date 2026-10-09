@@ -6,11 +6,13 @@ from typing import Any, Dict
 
 from homeassistant.components.light import ColorMode, LightEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import DOMAIN, SIGNAL_DEVICES_CHANGED, SIGNAL_DEVICE_UPDATE
 from .coordinator import OdaceSFSPCoordinator
@@ -31,6 +33,11 @@ async def async_setup_entry(
 
     @callback
     def _sync() -> None:
+        # Oublier les modules supprimés (ou changés de modèle) : sans cela, un
+        # module retiré puis rajouté ne recréerait pas son entité.
+        added.intersection_update(
+            uuid for uuid, dev in coord.devices.items() if dev.get("model") == "dcl"
+        )
         new_entities = []
         for uuid, dev in coord.devices.items():
             if dev.get("model") == "dcl" and uuid not in added:
@@ -43,7 +50,7 @@ async def async_setup_entry(
     entry.async_on_unload(async_dispatcher_connect(hass, SIGNAL_DEVICES_CHANGED, _sync))
 
 
-class OdaceSFSPLight(LightEntity):
+class OdaceSFSPLight(LightEntity, RestoreEntity):
     _attr_color_mode = ColorMode.ONOFF
     _attr_supported_color_modes = {ColorMode.ONOFF}
     _attr_should_poll = False
@@ -70,6 +77,12 @@ class OdaceSFSPLight(LightEntity):
         )
 
     async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        # Reprendre le dernier état connu : le module ne l'annonce pas forcément
+        # juste après un redémarrage de Home Assistant.
+        last = await self.async_get_last_state()
+        if last is not None and last.state in (STATE_ON, STATE_OFF):
+            self._attr_is_on = last.state == STATE_ON
         self.async_on_remove(
             async_dispatcher_connect(
                 self.hass,

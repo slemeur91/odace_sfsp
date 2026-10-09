@@ -12,6 +12,10 @@ MANUFACTURER_ID = 0x02B6  # 0xB602 en little-endian dans la trame
 # Catégories de configuration communes
 CONF_HCI = "hci"
 CONF_MAC = "mac"
+# MAC physique de l'adaptateur HCI choisi. Sert uniquement à retrouver l'adaptateur
+# si le noyau le renumérote ; CONF_MAC reste la MAC utilisée pour signer les trames
+# (elle peut être celle d'un ancien contrôleur Jeedom).
+CONF_ADAPTER_MAC = "adapter_mac"
 CONF_JEEDOM_KEY = "jeedom_key"
 CONF_DEVICES = "devices"
 CONF_UUID = "uuid"

@@ -227,6 +227,18 @@ def _parse_generic(trame: str, cf: str, uuid: str, string: str, result: dict) ->
             data["value"], data["label"] = "1", "Allumé"
         elif state_code == "00":
             data["value"], data["label"] = "0", "Eteint"
+        elif state_code == "10":
+            data["paired"] = "denied"
+            string += " pairing denied"
+        elif state_code == "11":
+            data["paired"] = "ok"
+            string += " pairing ok"
+        elif state_code == "12":
+            data["paired"] = "paired"
+            string += " paired"
+        elif state_code == "13":
+            data["paired"] = "unpaired"
+            string += " unpaired"
         string = _parse_groups(trame, string, data, offset=36)
     elif cf == "21":
         data["type"] = "binding"
@@ -360,6 +372,18 @@ def _parse_groups(trame: str, string: str, data: dict, offset: int) -> str:
         data["groups"][guuid] = entry
     string += f" group1 : {g1_uuid} group2 : {g2_uuid}"
     return string
+
+
+def forget_dedupe(uuid: str) -> None:
+    """Oublie la dernière trame mémorisée pour ``uuid``.
+
+    Appelé après l'envoi d'une commande : la prochaine annonce du module est
+    alors toujours transmise, même identique à la précédente, ce qui permet de
+    recaler l'état affiché si la commande n'a pas été reçue par le module.
+    """
+    uuid = uuid.lower()
+    _lastevent.pop(uuid, None)
+    _lastdata.pop(uuid, None)
 
 
 def reset_dedupe() -> None:

@@ -107,6 +107,7 @@
     },
     "error": {
       "already_exists": "Un module avec cet UUID existe déjà",
+      "invalid_key": "Clé Jeedom invalide — 24 caractères hexadécimaux requis",
       "invalid_mac": "Adresse MAC invalide — format attendu : AA:BB:CC:DD:EE:FF",
       "invalid_uuid": "UUID invalide — 6 caractères hexadécimaux requis (ex : 9c0300). Vérifier que les octets ne sont pas inversés."
     }

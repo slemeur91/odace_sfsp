@@ -4,6 +4,37 @@ Toutes les évolutions notables de l'intégration Schneider Odace SFSP sont cons
 
 Le détail de chaque version, bêtas comprises, est disponible sur la page des [releases](https://github.com/slemeur91/odace_sfsp/releases).
 
+## [2.1.1] - en cours
+
+Version diffusée en bêta.
+
+### 2.1.1_beta1 - 2026-10-09
+
+Corrections issues d'un audit du code.
+
+#### Corrections
+
+- Sauvegarde des modules : les ajouts, renommages et imports successifs d'une même session sont désormais tous écrits sur disque. Auparavant, seule la première modification était détectée par Home Assistant.
+- Changement de contrôleur : l'adresse MAC qui signe les trames est conservée, en mode local comme en mode ESPHome. Les modules restent associés. Seule une adresse vide ou `00:00:00:00:00:00` est remplacée.
+- Interface `hci` renumérotée : l'adaptateur est reconnu par sa propre adresse MAC, mémorisée à part. La bascule fonctionne aussi quand une autre adresse (Jeedom par exemple) est saisie dans les paramètres avancés. L'absence de toute interface opérationnelle est signalée par une erreur.
+- État affiché : après une commande, la prochaine annonce du module n'est plus écartée comme doublon. L'affichage se recale si la trame n'a pas été reçue, et un volet ne reste plus bloqué en « ouverture ».
+- Module supprimé puis rajouté : son entité est recréée sans recharger l'intégration.
+- Échec d'émission : une commande qui n'a pas pu partir affiche une erreur et ne modifie plus l'état de l'entité.
+- Clé Jeedom : le formulaire refuse une clé qui ne fait pas 24 caractères hexadécimaux. Une clé, une MAC ou une commande invalide ne provoque plus d'exception à l'envoi.
+- Rechargements inutiles : l'ajout, la modification ou la suppression d'un module ne recharge plus toute l'intégration.
+- Renommage d'un module : l'entité est renommée aussi.
+- Module `generic` : les codes d'association 10 à 13 sont décodés, comme pour `dcl` et `plug`. Le désappairage peut donc être confirmé.
+- Scènes : le type (`custom` ou `schneider`) est conservé à l'export et à l'import.
+
+#### Évolutions
+
+- Redémarrage : lumières, prises, actionneurs et volets reprennent leur dernier état connu.
+- Services : les paramètres sont validés, et avec plusieurs passerelles chaque appel est dirigé vers celle qui possède le module.
+- Émission : `hcitool` est appelé directement, sans passer par un shell.
+- Journaux : la clé Jeedom n'apparaît plus dans les traces de débogage.
+- Manifest : `esphome` et `mqtt` sont déclarés en dépendances optionnelles.
+- Traductions anglaises des services `add_device`, `remove_device` et `bind_device` corrigées.
+
 ## [2.1.0] - 2026-10-09
 
 ### Ajouts

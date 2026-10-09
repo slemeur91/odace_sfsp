@@ -124,7 +124,7 @@
       },
       "confirm_remove": {
         "title": "Remove {name}",
-        "description": "How do you want to remove module **{name}** (`{uuid}`)?\n\n_Note: the \"Unpair\" option waits for you to press the physical button on the module. Home Assistant removal only happens once the module confirms unpairing (code 13). If unpairing is not confirmed within 15 seconds, removal is forced._",
+        "description": "How do you want to remove module **{name}** (`{uuid}`)?\n\n_Note: the \"Unpair\" option waits for you to press the physical button on the module. The module is removed from Home Assistant as soon as it confirms unpairing (code 13). Without confirmation within 15 seconds of the button press, removal is forced._",
         "data": {
           "action": "Action"
         }
@@ -136,6 +136,7 @@
     },
     "error": {
       "already_exists": "A module with this UUID already exists",
+      "invalid_key": "Invalid Jeedom key — 24 hex characters required",
       "invalid_mac": "Invalid MAC address — expected format: AA:BB:CC:DD:EE:FF",
       "invalid_uuid": "Invalid UUID — 6 hex characters required (e.g. 9c0300). Check that the bytes are not reversed."
     }
@@ -149,15 +150,15 @@
       "name": "Learn mode",
       "description": "Enables inclusion (60 s default)"
     },
-    "add_module": {
+    "add_device": {
       "name": "Add a module",
       "description": "Manually add a module"
     },
-    "remove_module": {
+    "remove_device": {
       "name": "Remove a module",
       "description": "Removes a module"
     },
-    "bind_module": {
+    "bind_device": {
       "name": "Bind a module",
       "description": "Sends the BLE pairing frame"
     }

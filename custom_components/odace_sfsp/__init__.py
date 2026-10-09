@@ -3,12 +3,16 @@ from __future__ import annotations
 
 import logging
 
+import voluptuous as vol
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.helpers import device_registry as dr
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import config_validation as cv, device_registry as dr
 
 from .const import (
+    AC,
     CONF_ESPHOME_ENTRY_ID,
     CONF_ESPHOME_SERVICE,
     CONF_HCI,
@@ -16,7 +20,12 @@ from .const import (
     CONF_MAC,
     CONF_MQTT_TOPIC,
     CONF_SEND_MODE,
+    DEFAULT_ESPHOME_SERVICE,
+    DEFAULT_HCI,
+    DEFAULT_MQTT_TOPIC,
     DOMAIN,
+    SEND_MODE_HCI,
+    SUPPORTED_MODELS,
 )
 from .coordinator import OdaceSFSPCoordinator
 
@@ -52,47 +61,103 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Services
+    _async_register_services(hass)
+
+    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Services
+# ---------------------------------------------------------------------------
+# Les services sont enregistrés une seule fois pour le domaine et retrouvent la
+# passerelle concernée à chaque appel : avec plusieurs passerelles, ils ne sont
+# plus liés à la dernière configurée ni supprimés quand une seule est déchargée.
+
+_UUID = vol.All(cv.string, vol.Strip, vol.Lower, vol.Match(r"^[0-9a-f]{6}$"))
+
+_SERVICE_SCHEMAS = {
+    "send_command": vol.Schema(
+        {
+            vol.Required("uuid"): _UUID,
+            vol.Required("ac"): vol.In(list(AC)),
+            vol.Optional("options"): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
+        }
+    ),
+    "start_learn": vol.Schema(
+        {vol.Optional("timeout", default=60): vol.All(vol.Coerce(float), vol.Range(min=5, max=300))}
+    ),
+    "add_device": vol.Schema(
+        {
+            vol.Required("uuid"): _UUID,
+            vol.Required("model"): vol.In(SUPPORTED_MODELS),
+            vol.Optional("name"): cv.string,
+            vol.Optional("mac", default=""): cv.string,
+        }
+    ),
+    "remove_device": vol.Schema({vol.Required("uuid"): _UUID}),
+    "bind_device": vol.Schema({vol.Required("uuid"): _UUID}),
+}
+
+
+def _coordinators(hass: HomeAssistant) -> list[OdaceSFSPCoordinator]:
+    return list(hass.data.get(DOMAIN, {}).values())
+
+
+def _coordinator_for(hass: HomeAssistant, uuid: str | None = None) -> OdaceSFSPCoordinator:
+    """Passerelle qui possède ``uuid`` ; à défaut la première configurée."""
+    coordinators = _coordinators(hass)
+    if not coordinators:
+        raise HomeAssistantError("Odace SFSP : aucune passerelle chargée")
+    if uuid is not None:
+        for coord in coordinators:
+            if uuid in coord.devices:
+                return coord
+    return coordinators[0]
+
+
+def _async_register_services(hass: HomeAssistant) -> None:
+    if hass.services.has_service(DOMAIN, "send_command"):
+        return
+
     async def _svc_send_command(call: ServiceCall) -> None:
-        await coordinator.async_send_command(
+        await _coordinator_for(hass, call.data["uuid"]).async_send_command(
             call.data["uuid"],
             call.data["ac"],
             call.data.get("options"),
         )
 
     async def _svc_learn(call: ServiceCall) -> None:
-        coordinator.start_learn(call.data.get("timeout", 60))
+        for coord in _coordinators(hass):
+            coord.start_learn(call.data["timeout"])
 
     async def _svc_add_device(call: ServiceCall) -> None:
-        await coordinator.async_add_device(
+        uuid, model = call.data["uuid"], call.data["model"]
+        await _coordinator_for(hass, uuid).async_add_device(
             {
-                "uuid": call.data["uuid"],
-                "mac": call.data.get("mac", ""),
-                "model": call.data["model"],
-                "name": call.data.get("name", f"Odace SFSP {call.data['model']} {call.data['uuid']}"),
+                "uuid": uuid,
+                "mac": call.data["mac"],
+                "model": model,
+                "name": call.data.get("name") or f"Odace SFSP {model} {uuid}",
             }
         )
 
     async def _svc_remove_device(call: ServiceCall) -> None:
-        await coordinator.async_remove_device(call.data["uuid"])
+        await _coordinator_for(hass, call.data["uuid"]).async_remove_device(call.data["uuid"])
 
     async def _svc_bind_device(call: ServiceCall) -> None:
         """Envoie la trame de pairing pour un périphérique déjà connu."""
-        await coordinator.async_send_pair(call.data["uuid"])
+        await _coordinator_for(hass, call.data["uuid"]).async_send_pair(call.data["uuid"])
 
-    hass.services.async_register(DOMAIN, "send_command", _svc_send_command)
-    hass.services.async_register(DOMAIN, "start_learn", _svc_learn)
-    hass.services.async_register(DOMAIN, "add_device", _svc_add_device)
-    hass.services.async_register(DOMAIN, "remove_device", _svc_remove_device)
-    hass.services.async_register(DOMAIN, "bind_device", _svc_bind_device)
-
-    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
-    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, "send_command"))
-    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, "start_learn"))
-    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, "add_device"))
-    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, "remove_device"))
-    entry.async_on_unload(lambda: hass.services.async_remove(DOMAIN, "bind_device"))
-    return True
+    handlers = {
+        "send_command": _svc_send_command,
+        "start_learn": _svc_learn,
+        "add_device": _svc_add_device,
+        "remove_device": _svc_remove_device,
+        "bind_device": _svc_bind_device,
+    }
+    for name, handler in handlers.items():
+        hass.services.async_register(DOMAIN, name, handler, schema=_SERVICE_SCHEMAS[name])
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -107,14 +172,18 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
     if coord is None:
         await hass.config_entries.async_reload(entry.entry_id)
         return
+    # Mêmes valeurs par défaut que le coordinator : une clé absente de la
+    # configuration ne doit pas être prise pour un changement.
+    data = entry.data
+    send_mode = data.get(CONF_SEND_MODE, SEND_MODE_HCI)
     if (
-        entry.data.get(CONF_HCI) != coord.hci_name
-        or entry.data.get(CONF_MAC) != coord.dongle_mac
-        or entry.data.get(CONF_SEND_MODE) != coord.send_mode
-        or entry.data.get(CONF_MQTT_TOPIC) != coord.mqtt_topic
-        or entry.data.get(CONF_JEEDOM_KEY) != coord.jeedom_key
-        or entry.data.get(CONF_ESPHOME_ENTRY_ID) != coord.esphome_entry_id
-        or entry.data.get(CONF_ESPHOME_SERVICE) != coord.esphome_service
+        send_mode != coord.send_mode
+        or (send_mode == SEND_MODE_HCI and data.get(CONF_HCI, DEFAULT_HCI) != coord.hci_name)
+        or data.get(CONF_MAC, "00:00:00:00:00:00") != coord.dongle_mac
+        or data.get(CONF_MQTT_TOPIC, DEFAULT_MQTT_TOPIC) != coord.mqtt_topic
+        or data.get(CONF_JEEDOM_KEY, "") != coord.jeedom_key
+        or data.get(CONF_ESPHOME_ENTRY_ID, "") != coord.esphome_entry_id
+        or data.get(CONF_ESPHOME_SERVICE, DEFAULT_ESPHOME_SERVICE) != coord.esphome_service
     ):
         await hass.config_entries.async_reload(entry.entry_id)
 
@@ -124,4 +193,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         coordinator: OdaceSFSPCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
         await coordinator.async_stop()
+        # Dernière passerelle déchargée : retirer les services du domaine
+        if not hass.data[DOMAIN]:
+            for name in _SERVICE_SCHEMAS:
+                hass.services.async_remove(DOMAIN, name)
     return unload_ok

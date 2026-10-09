@@ -13,6 +13,7 @@ import logging
 from typing import Any, Dict
 
 from homeassistant.components.cover import (
+    ATTR_CURRENT_POSITION,
     CoverDeviceClass,
     CoverEntity,
     CoverEntityFeature,
@@ -23,6 +24,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import DOMAIN, SIGNAL_DEVICES_CHANGED, SIGNAL_DEVICE_UPDATE
 from .coordinator import OdaceSFSPCoordinator
@@ -43,6 +45,11 @@ async def async_setup_entry(
 
     @callback
     def _sync() -> None:
+        # Oublier les modules supprimés (ou changés de modèle) : sans cela, un
+        # module retiré puis rajouté ne recréerait pas son entité.
+        added.intersection_update(
+            uuid for uuid, dev in coord.devices.items() if dev.get("model") == "shutter"
+        )
         new = []
         for uuid, dev in coord.devices.items():
             if dev.get("model") == "shutter" and uuid not in added:
@@ -55,7 +62,7 @@ async def async_setup_entry(
     entry.async_on_unload(async_dispatcher_connect(hass, SIGNAL_DEVICES_CHANGED, _sync))
 
 
-class OdaceSFSPCover(CoverEntity):
+class OdaceSFSPCover(CoverEntity, RestoreEntity):
     _attr_should_poll = False
     _attr_device_class = CoverDeviceClass.SHUTTER
     _attr_icon = "mdi:roller-blind"
@@ -89,6 +96,14 @@ class OdaceSFSPCover(CoverEntity):
         )
 
     async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        # Reprendre la dernière position connue après un redémarrage de Home Assistant
+        last = await self.async_get_last_state()
+        if last is not None:
+            position = last.attributes.get(ATTR_CURRENT_POSITION)
+            if isinstance(position, (int, float)):
+                self._attr_current_cover_position = int(position)
+                self._attr_is_closed = int(position) == 0
         self.async_on_remove(
             async_dispatcher_connect(
                 self.hass,

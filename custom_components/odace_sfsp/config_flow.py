@@ -21,7 +21,6 @@ Rétrocompatibilité :
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
@@ -31,17 +30,16 @@ from typing import Any, Dict
 import voluptuous as vol
 
 from homeassistant import config_entries
-from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.selector import (
     TextSelector,
     TextSelectorConfig,
 )
-from homeassistant.components import mqtt as ha_mqtt
 from homeassistant.const import CONF_MAC
 from homeassistant.data_entry_flow import FlowResult
 
 from .sender import read_controller_mac
 from .const import (
+    CONF_ADAPTER_MAC,
     CONF_DEVICES,
     CONF_ESPHOME_ENTRY_ID,
     CONF_ESPHOME_SERVICE,
@@ -59,13 +57,15 @@ from .const import (
     SEND_MODE_ESPHOME_API,
     SEND_MODE_HCI,
     SEND_MODE_MQTT,
-    SIGNAL_DEVICES_CHANGED,
     SUPPORTED_MODELS,
 )
 
 _LOGGER = logging.getLogger(__name__)
 _MAC_RE  = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 _UUID_RE = re.compile(r"^[0-9A-Fa-f]{6}$")
+# Clé Jeedom : 12 octets, soit 24 caractères hexadécimaux (complète la clé AES-128)
+_KEY_RE  = re.compile(r"^[0-9A-Fa-f]{24}$")
+_NULL_MAC = "00:00:00:00:00:00"
 
 _UUID_FORMAT_LOGS  = "logs"
 _UUID_FORMAT_LABEL = "label"
@@ -230,6 +230,7 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_SEND_MODE: SEND_MODE_HCI,
                     CONF_HCI: hci_name,
                     CONF_MAC: mac,
+                    CONF_ADAPTER_MAC: "" if mac == _NULL_MAC else mac,
                     CONF_JEEDOM_KEY: secrets.token_hex(12),
                     CONF_DEVICES: {},
                 },
@@ -342,6 +343,7 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
     def __init__(self, entry: config_entries.ConfigEntry) -> None:
         self.entry = entry
         self._editing: str = ""
+        self._remove_uuid: str = ""
 
     # ------------------------------------------------------------------
     # Menu principal
@@ -434,8 +436,12 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
             if user_input is not None:
                 entry_id  = user_input[CONF_ESPHOME_ENTRY_ID]
                 service   = user_input.get(CONF_ESPHOME_SERVICE, "").strip()
-                # MAC auto-détectée — pas de saisie manuelle en v2
-                esp32_mac = esphome_macs.get(entry_id, self.entry.data.get(CONF_MAC, ""))
+                # La MAC de signature déjà enregistrée est conservée (les modules ont
+                # été associés avec elle) ; la MAC auto-détectée ne sert que si aucune
+                # n'est encore connue.
+                esp32_mac = self.entry.data.get(CONF_MAC, "")
+                if esp32_mac in ("", _NULL_MAC):
+                    esp32_mac = esphome_macs.get(entry_id, "")
                 if not service:
                     errors[CONF_ESPHOME_SERVICE] = "invalid_service"
                 if not errors:
@@ -471,10 +477,18 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
             if user_input is not None:
                 hci_name = user_input[CONF_HCI]
                 mac = await self.hass.async_add_executor_job(read_controller_mac, hci_name)
+                # La MAC de signature (CONF_MAC) est celle avec laquelle les modules
+                # ont été associés : elle n'est pas remplacée par celle du nouvel
+                # adaptateur, sinon tous les modules seraient à réassocier. Elle se
+                # modifie dans Paramètres avancés. Seule une MAC encore nulle est
+                # initialisée ici.
+                new_data = {**self.entry.data, CONF_HCI: hci_name, CONF_ADAPTER_MAC: mac or ""}
+                if self.entry.data.get(CONF_MAC, _NULL_MAC) in ("", _NULL_MAC) and mac:
+                    new_data[CONF_MAC] = mac
                 self.hass.config_entries.async_update_entry(
                     self.entry,
                     title=f"Odace SFSP ({hci_name})",
-                    data={**self.entry.data, CONF_HCI: hci_name, CONF_MAC: mac or "00:00:00:00:00:00"},
+                    data=new_data,
                 )
                 return self.async_create_entry(title="", data={})
             return self.async_show_form(
@@ -521,6 +535,8 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
             new_mac = user_input.get(CONF_MAC, "").strip()
             if new_mac and not _is_valid_mac(new_mac):
                 errors[CONF_MAC] = "invalid_mac"
+            if new_key and not _KEY_RE.match(new_key):
+                errors[CONF_JEEDOM_KEY] = "invalid_key"
             if not errors:
                 new_data = {**self.entry.data}
                 if new_key:
@@ -577,6 +593,8 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                 "model": d.get("model", ""),
                 "name":  d.get("name", ""),
             }
+            if d.get("type"):
+                entry["type"] = d["type"]
             export_lines.append(
                 f'"{uid}": {json.dumps(entry, ensure_ascii=False)},'
             )
@@ -646,15 +664,14 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                         skipped += 1
                         continue
 
-                    to_add.append({"uuid": uuid, "mac": mac, "model": model, "name": name})
+                    device = {"uuid": uuid, "mac": mac, "model": model, "name": name}
+                    if entry.get("type") in ("custom", "schneider"):
+                        device["type"] = entry["type"]  # type de scène
+                    to_add.append(device)
 
                 # Ajout en masse : une seule persistance + un seul signal
-                for device in to_add:
-                    coord.devices[device["uuid"]] = {**device}
                 if to_add:
-                    new_data = {**self.entry.data, CONF_DEVICES: coord.devices}
-                    self.hass.config_entries.async_update_entry(self.entry, data=new_data)
-                    async_dispatcher_send(self.hass, SIGNAL_DEVICES_CHANGED)
+                    await coord.async_add_devices(to_add)
 
                 if invalid:
                     _LOGGER.warning(
@@ -793,6 +810,7 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                 updates = {CONF_NAME: user_input[CONF_NAME], CONF_MODEL: user_input[CONF_MODEL], CONF_MAC: user_input.get(CONF_MAC, "")}
                 model_changed = user_input[CONF_MODEL] != current.get("model")
                 uuid_changed  = new_uuid != self._editing
+                name_changed  = user_input[CONF_NAME] != current.get("name")
                 if uuid_changed or model_changed:
                     # UUID ou modèle changé : suppression complète (efface toutes les
                     # entités liées à l'ancien modèle) puis recréation propre.
@@ -808,6 +826,12 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                         )
                 else:
                     await coord.async_update_device(self._editing, updates)
+                    if name_changed:
+                        # Les entités gardent le nom lu à leur création : un
+                        # rechargement applique le nouveau nom sans redémarrage.
+                        self.hass.async_create_task(
+                            self.hass.config_entries.async_reload(self.entry.entry_id)
+                        )
                 return self.async_create_entry(title="", data={})
 
         reversed_current = _reverse_uuid(self._editing)

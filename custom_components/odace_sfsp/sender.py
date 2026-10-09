@@ -77,9 +77,11 @@ def build_frame(device: Dict[str, Any], frame_type: str, jeedom_key: str, data: 
     header = UNIQUE_HEADER + TYPES["gateway"] + HEADER_VV + HEADER_FS
 
     if frame_type == "pair":
-        _LOGGER.debug("Building pairing data with key %s", jeedom_key)
+        _LOGGER.debug("Building pairing data")
         payload = GATEWAY["binding"] + UUID_CONTROLLER + str(jeedom_key)
     else:
+        if data["ac"] not in AC:
+            raise ValueError(f"Commande inconnue '{data['ac']}' — commandes valides : {list(AC)}")
         data_ac = AC[data["ac"]]
         if model == "scene":
             param = SCENES[device.get("type", "custom")]
@@ -148,15 +150,16 @@ def craft_payload(
     """
     try:
         frame = build_frame(device, frame_type, jeedom_key, data)
+        buffer = _compute_buffer(dongle_mac, frame)
+        if frame_type == "pair":
+            key = UNIQUE_KEY.replace(" ", "").lower()
+        else:
+            key = (GATEWAY["binding"] + UUID_CONTROLLER + str(jeedom_key)).replace(" ", "").lower()
+        hashed = _cmac_hash(key, buffer)
     except ValueError as err:
-        _LOGGER.error("craft_payload : %s", err)
+        # ValueError couvre aussi binascii.Error : clé Jeedom, MAC ou UUID non hexadécimal
+        _LOGGER.error("craft_payload : trame impossible à construire — %s", err)
         return ""
-    buffer = _compute_buffer(dongle_mac, frame)
-    if frame_type == "pair":
-        key = UNIQUE_KEY.replace(" ", "").lower()
-    else:
-        key = (GATEWAY["binding"] + UUID_CONTROLLER + str(jeedom_key)).replace(" ", "").lower()
-    hashed = _cmac_hash(key, buffer)
     cmac_short = hashed[:8]
     payload = (frame + cmac_short).upper()
     _LOGGER.debug("Final payload is %s", payload)
@@ -184,19 +187,32 @@ def validate_payload(payload: str) -> bool:
 _EXT_ADV_HANDLE = "03"
 
 
+# Valeur retournée par _hcitool quand la commande n'a pas pu être exécutée du tout
+# (hcitool absent, interface inexistante ou DOWN) — à distinguer d'un status HCI.
+_HCITOOL_FAILED = -1
+
+
 async def _hcitool(hci_index: int, args: str) -> int | None:
-    """Exécute ``hcitool cmd`` et retourne le status HCI, ou None.
+    """Exécute ``hcitool cmd`` et retourne le status HCI.
+
+    - status HCI (0 = accepté) si la réponse du contrôleur a pu être lue ;
+    - None si la sortie de hcitool est illisible ;
+    - ``_HCITOOL_FAILED`` si hcitool n'a pas pu s'exécuter.
 
     hcitool sort en 0 même si le contrôleur rejette la commande.
     """
-    cmd = f"hcitool -i hci{hci_index} cmd {args}"
-    proc = await asyncio.create_subprocess_shell(
-        cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
+    cmd = ["hcitool", "-i", f"hci{hci_index}", "cmd", *args.split()]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+    except OSError as err:
+        _LOGGER.warning("hcitool introuvable ou non exécutable : %s", err)
+        return _HCITOOL_FAILED
     out, err = await proc.communicate()
     if proc.returncode != 0:
-        _LOGGER.warning("hcitool failed (%s): %s", cmd, err.decode(errors="ignore"))
-        return None
+        _LOGGER.warning("hcitool failed (%s): %s", " ".join(cmd), err.decode(errors="ignore"))
+        return _HCITOOL_FAILED
     # Command Complete : <ncmd> <opcode lo> <opcode hi> <status> ...
     text = out.decode(errors="ignore")
     event = text.split("> HCI Event:", 1)[-1].splitlines()[1:]
@@ -234,8 +250,11 @@ async def _send_extended(hci_index: int, payload_spaced: str) -> int | None:
     return 0
 
 
-async def _send_legacy(hci_index: int, payload_spaced: str) -> None:
-    """Émission via les commandes LE legacy (contrôleurs BT 4.x)."""
+async def _send_legacy(hci_index: int, payload_spaced: str) -> bool:
+    """Émission via les commandes LE legacy (contrôleurs BT 4.x).
+
+    Retourne False si hcitool n'a pas pu activer l'advertising (interface absente).
+    """
     # Désactive le scan passif de BlueZ avant d'activer l'advertising.
     # Sur la plupart des chipsets BLE, scan et advertising sont mutuellement
     # exclusifs : si BlueZ maintient le scan actif, cmd 0x000a 01 peut être
@@ -246,6 +265,9 @@ async def _send_legacy(hci_index: int, payload_spaced: str) -> None:
     await _hcitool(hci_index, f"0x08 0x0008 1F {payload_spaced}")
     await _hcitool(hci_index, "0x08 0x0006 A0 00 A0 00 03 00 00 00 00 00 00 00 00 07 00")
     status = await _hcitool(hci_index, "0x08 0x000a 01")
+    if status == _HCITOOL_FAILED:
+        _LOGGER.error("hci%d : émission impossible, hcitool ne peut pas piloter l'interface", hci_index)
+        return False
     if status not in (0, None):
         _LOGGER.warning("Le contrôleur hci%d a refusé l'advertising legacy (status 0x%02x)", hci_index, status)
     await asyncio.sleep(0.5)
@@ -256,6 +278,7 @@ async def _send_legacy(hci_index: int, payload_spaced: str) -> None:
     # Restaure le scan passif LE
     await _hcitool(hci_index, "0x08 0x000b 00 10 00 10 00 00 00")
     await _hcitool(hci_index, "0x08 0x000c 01 00")
+    return True
 
 
 async def async_send(hci_index: int, payload: str) -> bool:
@@ -266,6 +289,7 @@ async def async_send(hci_index: int, payload: str) -> bool:
     lorsque plusieurs turn_on arrivent simultanément (ex. scène de pièce).
     """
     if not validate_payload(payload):
+        _LOGGER.error("Payload invalide, envoi HCI annulé : %s", payload)
         return False
     payload_spaced = " ".join(payload[i : i + 2] for i in range(0, len(payload), 2)).upper()
     _LOGGER.info("Send to BLE [HCI hci%d]: %s", hci_index, payload_spaced)
@@ -274,7 +298,9 @@ async def async_send(hci_index: int, payload: str) -> bool:
         status = await _send_extended(hci_index, payload_spaced)
         if status == 0:
             return True
-        if status is None:
+        if status == _HCITOOL_FAILED:
+            _LOGGER.debug("hci%d : hcitool en échec sur l'advertising étendu, tentative legacy", hci_index)
+        elif status is None:
             _LOGGER.warning(
                 "hci%d : impossible de lire le status HCI (output hcitool inattendu)"
                 " — tentative legacy",
@@ -285,8 +311,7 @@ async def async_send(hci_index: int, payload: str) -> bool:
                 "hci%d : advertising étendu refusé (status 0x%02x), tentative legacy",
                 hci_index, status,
             )
-        await _send_legacy(hci_index, payload_spaced)
-    return True
+        return await _send_legacy(hci_index, payload_spaced)
 
 
 # ---------------------------------------------------------------------------

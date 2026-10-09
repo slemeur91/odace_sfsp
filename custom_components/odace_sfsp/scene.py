@@ -50,6 +50,11 @@ async def async_setup_entry(
 
     @callback
     def _sync() -> None:
+        # Oublier les modules supprimés (ou changés de modèle) : sans cela, un
+        # module retiré puis rajouté ne recréerait pas son entité.
+        added.intersection_update(
+            uuid for uuid, dev in coord.devices.items() if dev.get("model") == "scene"
+        )
         new = []
         for uuid, dev in coord.devices.items():
             if dev.get("model") == "scene" and uuid not in added:
