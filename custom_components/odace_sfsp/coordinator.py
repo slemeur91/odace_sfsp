@@ -16,7 +16,7 @@ import time
 from typing import Any, Dict, Optional
 
 from homeassistant.components import bluetooth
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import device_registry as dr, issue_registry as ir
 from homeassistant.components.bluetooth import (
     BluetoothCallbackMatcher,
     BluetoothChange,
@@ -50,6 +50,8 @@ from .const import (
     DEFAULT_MQTT_TOPIC,
     DOMAIN,
     MANUFACTURER_ID,
+    PAIRABLE_MODELS,
+    SCENE_QUERY_AC,
     SEND_MODE_ESPHOME_API,
     SEND_MODE_HCI,
     SEND_MODE_MQTT,
@@ -65,6 +67,24 @@ _NULL_MAC = "00:00:00:00:00:00"
 # Si start_learn est appelé dans cette fenêtre, le périphérique est enregistré
 # sans que l'utilisateur ait à appuyer à nouveau sur le bouton.
 _PENDING_BINDING_TTL = 60.0
+
+# Durée pendant laquelle un module reste « à associer » après son ajout ou une
+# demande de réassociation. Hors de cette fenêtre, ses trames binding sont
+# ignorées : la trame pair étant une bascule, la renvoyer à un module déjà
+# associé le désassocierait.
+_AWAITING_PAIR_TTL = 30 * 60.0
+
+# Une réponse d'association (codes 10 à 13) n'est attribuée à ce contrôleur que
+# si elle suit de près une trame pair qu'il a lui-même envoyée.
+_PAIR_REPLY_WINDOW = 30.0
+
+# Résultats possibles d'un désappairage (voir start_unpair)
+UNPAIR_UNPAIRED    = "unpaired"     # code 13 reçu, module supprimé
+UNPAIR_PAIRED      = "paired"       # code 12 reçu : le module s'est associé, il est conservé
+UNPAIR_NO_PRESS    = "no_press"     # aucun appui sur le bouton du module
+UNPAIR_NO_ANSWER   = "no_answer"    # trame envoyée, pas de réponse : module conservé
+UNPAIR_SEND_FAILED = "send_failed"  # la trame n'a pas pu être émise
+UNPAIR_UNKNOWN     = "unknown"      # module inconnu
 
 
 class OdaceSFSPCoordinator:
@@ -114,10 +134,21 @@ class OdaceSFSPCoordinator:
         self._pending_bindings: Dict[str, Dict[str, Any]] = {}
         # UUIDs en attente de désappariage (bouton "Désappairer et supprimer")
         self._pending_unpair: set = set()
-        # UUIDs pour lesquels la trame pair a été envoyée, en attente du code 13 (confirmation désappariage)
+        # UUIDs pour lesquels la trame pair est en cours d'envoi ou envoyée, en attente
+        # du code 13 (confirmation désappariage)
         self._pending_unpair_confirm: set = set()
+        # Résultat attendu par l'écran de désappairage, par UUID
+        self._unpair_futures: Dict[str, asyncio.Future] = {}
+        self._unpair_confirm_timeout: float = 15.0
+        # Modules « à associer » : UUID → échéance (voir _AWAITING_PAIR_TTL)
+        self._awaiting_pair: Dict[str, float] = {}
         # Horodatage du dernier envoi de trame pair par UUID (anti-tempête re-pairing)
         self._last_pair_sent: Dict[str, float] = {}
+        # Recherche de scènes en cours : UUID du module interrogé → échéance.
+        # Les réponses « scene » ne sont exploitées que dans cette fenêtre.
+        self._scene_discovery_until: Dict[str, float] = {}
+        self._scenes_found: list[str] = []
+        self._scenes_created: list[str] = []
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -263,6 +294,11 @@ class OdaceSFSPCoordinator:
         if self._unsub_bt is not None:
             self._unsub_bt()
             self._unsub_bt = None
+        # Libérer les écrans de désappairage encore en attente
+        for uuid in list(self._unpair_futures):
+            self._finish_unpair(uuid, UNPAIR_NO_PRESS)
+        self._pending_unpair.clear()
+        self._pending_unpair_confirm.clear()
 
     # ------------------------------------------------------------------
     # BLE callback (identique dans les deux modes)
@@ -299,24 +335,29 @@ class OdaceSFSPCoordinator:
                 # Périphérique connu qui renvoie une trame binding
                 model = self.devices[uuid].get("model", "")
                 if uuid in self._pending_unpair:
-                    # Mode désappariage actif : envoyer pair (toggle → désappairé) puis retirer
+                    # Désappairage demandé : une seule trame pair (bascule → désappairé),
+                    # puis attente de la confirmation du module.
                     self._pending_unpair.discard(uuid)
-                    _LOGGER.info(
-                        "Désappariage %s : binding reçu → envoi pair (toggle désappairé) puis suppression",
-                        uuid,
-                    )
-                    self.hass.async_create_task(self._async_unpair_and_remove(uuid))
-                elif model in ("dcl", "shutter", "plug", "generic"):
-                    # Reset usine ou perte d'appairage → ré-appairage automatique
-                    # Debounce : évite d'envoyer plusieurs trames pair si plusieurs
-                    # frames binding arrivent en rafale (bouton tenu, etc.)
-                    _now = time.time()
-                    if _now - self._last_pair_sent.get(uuid, 0.0) > 5.0:
-                        self._last_pair_sent[uuid] = _now
-                        _LOGGER.info("Re-binding connu %s → envoi pair", uuid)
-                        self.hass.async_create_task(self.async_send_pair(uuid))
+                    _LOGGER.info("Désappariage %s : binding reçu → envoi de la trame pair", uuid)
+                    self.hass.async_create_task(self._async_unpair_send(uuid))
+                elif model in PAIRABLE_MODELS:
+                    if not self.is_awaiting_pair(uuid):
+                        # Module considéré comme associé : ne rien envoyer, la trame
+                        # pair le désassocierait.
+                        _LOGGER.debug(
+                            "Binding de %s ignoré : module déjà associé"
+                            " (« Réassocier un module » pour forcer)", uuid,
+                        )
                     else:
-                        _LOGGER.debug("Re-binding %s ignoré (debounce 5s)", uuid)
+                        # Debounce : évite d'envoyer plusieurs trames pair si plusieurs
+                        # frames binding arrivent en rafale (bouton tenu, etc.)
+                        _now = time.time()
+                        if _now - self._last_pair_sent.get(uuid, 0.0) > 5.0:
+                            self._last_pair_sent[uuid] = _now
+                            _LOGGER.info("Module %s à associer : binding reçu → envoi pair", uuid)
+                            self.hass.async_create_task(self.async_send_pair(uuid))
+                        else:
+                            _LOGGER.debug("Binding %s ignoré (debounce 5s)", uuid)
             return
 
         # ---- Trames d'advertisement ----
@@ -327,27 +368,37 @@ class OdaceSFSPCoordinator:
         if not self.devices[uuid].get("mac"):
             self.devices[uuid]["mac"] = service_info.address
 
+        # ---- Réponse à une recherche de scènes ----
+        if result["data"].get("type") == "scene":
+            if time.time() < self._scene_discovery_until.get(uuid, 0.0):
+                self._register_scenes(result["data"])
+            return
+
+        paired_state = result["data"].get("paired")
+
         # Suivi du désappariage en attente de confirmation
-        if uuid in self._pending_unpair_confirm:
-            paired_state = result["data"].get("paired")
+        if uuid in self._pending_unpair_confirm and paired_state in ("unpaired", "paired", "ok"):
+            self._pending_unpair_confirm.discard(uuid)
             if paired_state == "unpaired":
-                # Code 13 : module bien désappairé → suppression
-                self._pending_unpair_confirm.discard(uuid)
+                # Code 13 : module bien désappairé → suppression, rien d'autre n'est attendu
                 _LOGGER.info(
                     "Odace SFSP — désappariage confirmé (code 13) pour %s → suppression", uuid
                 )
-                self.hass.async_create_task(self.async_remove_device(uuid))
-                return
-            if paired_state == "paired":
-                # Code 12 : la trame pair a rebasculé le module en appairé (état inverse)
-                # → envoyer une seconde trame pair pour repasser en désappairé
-                _LOGGER.info(
-                    "Odace SFSP — module %s est passé en appairé (code 12) au lieu de désappairé"
-                    " → envoi d'une seconde trame pair",
-                    uuid,
+                self.hass.async_create_task(self._async_remove_unpaired(uuid))
+            else:
+                # Code 12 : le module n'était pas associé, la trame pair vient de
+                # l'associer. Aucune seconde trame : il n'est plus en binding et ne
+                # l'accepterait pas. Le module est conservé.
+                _LOGGER.warning(
+                    "Odace SFSP — %s s'est associé (code 12) au lieu de se désappairer :"
+                    " module conservé, relancer le désappairage si nécessaire", uuid,
                 )
-                self.hass.async_create_task(self.async_send_pair(uuid))
-                return
+                self._clear_awaiting_pair(uuid)
+                self._finish_unpair(uuid, UNPAIR_PAIRED)
+            return
+
+        if paired_state:
+            self._handle_pair_reply(uuid, paired_state)
 
         async_dispatcher_send(self.hass, SIGNAL_DEVICE_UPDATE.format(uuid=uuid), result)
 
@@ -363,9 +414,120 @@ class OdaceSFSPCoordinator:
             "model": model, "name": f"Odace SFSP {model} {uuid}",
         }
         async_dispatcher_send(self.hass, SIGNAL_DEVICES_CHANGED)
-        if model in ("dcl", "shutter", "plug", "generic"):
+        if model in PAIRABLE_MODELS:
+            self.mark_awaiting_pair(uuid)
             self.hass.async_create_task(self.async_send_pair(uuid))
         self.hass.async_create_task(self._async_persist())
+
+    # ------------------------------------------------------------------
+    # Association : modules « à associer » et réponses du module
+    # ------------------------------------------------------------------
+    def mark_awaiting_pair(self, uuid: str) -> bool:
+        """Marque un module « à associer » pendant _AWAITING_PAIR_TTL.
+
+        Tant que la marque est posée, un appui sur le bouton du module (trame
+        binding) déclenche l'envoi de la trame pair. Retourne False si le module
+        est inconnu ou n'est pas d'un modèle commandable.
+        """
+        uuid = uuid.lower()
+        device = self.devices.get(uuid)
+        if device is None or device.get("model") not in PAIRABLE_MODELS:
+            return False
+        self._awaiting_pair[uuid] = time.time() + _AWAITING_PAIR_TTL
+        return True
+
+    def is_awaiting_pair(self, uuid: str) -> bool:
+        expires = self._awaiting_pair.get(uuid.lower())
+        if expires is None:
+            return False
+        if time.time() >= expires:
+            self._awaiting_pair.pop(uuid.lower(), None)
+            return False
+        return True
+
+    @callback
+    def _clear_awaiting_pair(self, uuid: str) -> None:
+        """Le module est associé : retirer la marque et l'alerte éventuelle."""
+        self._awaiting_pair.pop(uuid, None)
+        ir.async_delete_issue(self.hass, DOMAIN, f"module_unpaired_{uuid}")
+
+    @callback
+    def _handle_pair_reply(self, uuid: str, paired_state: str) -> None:
+        """Traite la réponse d'un module à une trame pair (hors désappairage)."""
+        if time.time() - self._last_pair_sent.get(uuid, 0.0) > _PAIR_REPLY_WINDOW:
+            return  # réponse à un autre contrôleur : ne nous concerne pas
+        if paired_state in ("paired", "ok"):
+            _LOGGER.info("Odace SFSP — module %s associé (%s)", uuid, paired_state)
+            self._clear_awaiting_pair(uuid)
+        elif paired_state == "unpaired":
+            # La trame pair a désassocié un module qui l'était déjà. Il reste « à
+            # associer » : un nouvel appui sur son bouton le réassociera.
+            _LOGGER.warning(
+                "Odace SFSP — module %s désassocié (code 13) : appuyer à nouveau sur"
+                " son bouton pour le réassocier", uuid,
+            )
+            self.mark_awaiting_pair(uuid)
+            ir.async_create_issue(
+                self.hass, DOMAIN, f"module_unpaired_{uuid}",
+                is_fixable=False,
+                is_persistent=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="module_unpaired",
+                translation_placeholders={
+                    "name": self.devices.get(uuid, {}).get("name", uuid),
+                    "uuid": uuid,
+                },
+            )
+        elif paired_state == "denied":
+            _LOGGER.warning("Odace SFSP — module %s : association refusée (code 10)", uuid)
+
+    @callback
+    def _register_scenes(self, data: Dict[str, Any]) -> None:
+        """Crée les scènes listées par un module (même logique que Jeedom).
+
+        Une scène n'est pas un module : c'est un identifiant de 4 octets
+        (8 caractères hex) mémorisé par les modules. ``ffffffff`` = emplacement vide.
+        """
+        scene_type = data.get("subtype", "custom")
+        created = False
+        for scene_uuid in data.get("scenes", []):
+            scene_uuid = scene_uuid.lower()
+            if scene_uuid == "ffffffff" or len(scene_uuid) != 8:
+                continue
+            if scene_uuid not in self._scenes_found:
+                self._scenes_found.append(scene_uuid)
+            if scene_uuid in self.devices:
+                continue
+            self.devices[scene_uuid] = {
+                "uuid": scene_uuid, "mac": "", "model": "scene",
+                "type": scene_type, "name": f"Odace SFSP scene {scene_uuid}",
+            }
+            self._scenes_created.append(scene_uuid)
+            created = True
+            _LOGGER.info("Odace SFSP — scène %s (%s) ajoutée", scene_uuid, scene_type)
+        if created:
+            async_dispatcher_send(self.hass, SIGNAL_DEVICES_CHANGED)
+            self.hass.async_create_task(self._async_persist())
+
+    async def async_discover_scenes(
+        self, uuid: str, scene_types: list[str], wait: float = 2.0
+    ) -> Dict[str, list[str]]:
+        """Demande à un module la liste de ses scènes et crée celles qui manquent.
+
+        Retourne ``{"found": [...], "created": [...]}`` (identifiants de scènes).
+        Lève HomeAssistantError si la demande n'a pas pu être émise.
+        """
+        uuid = uuid.lower()
+        self._scenes_found = []
+        self._scenes_created = []
+        try:
+            for scene_type in scene_types:
+                self._scene_discovery_until[uuid] = time.time() + wait + 1.0
+                await self.async_send_command(uuid, SCENE_QUERY_AC[scene_type])
+                await asyncio.sleep(wait)
+        finally:
+            self._scene_discovery_until.pop(uuid, None)
+        return {"found": list(self._scenes_found), "created": list(self._scenes_created)}
 
     async def async_add_device(self, device: Dict[str, Any]) -> None:
         uuid = device["uuid"].lower()
@@ -376,6 +538,8 @@ class OdaceSFSPCoordinator:
     async def async_remove_device(self, uuid: str) -> None:
         uuid = uuid.lower()
         self.devices.pop(uuid, None)
+        self._awaiting_pair.pop(uuid, None)
+        ir.async_delete_issue(self.hass, DOMAIN, f"module_unpaired_{uuid}")
         await self._async_persist()
         # Supprimer le device (et ses entités) du registre HA
         dev_reg = dr.async_get(self.hass)
@@ -483,73 +647,106 @@ class OdaceSFSPCoordinator:
         forget_dedupe(uuid)
         _LOGGER.info("Odace SFSP TX [%s] uuid=%s ac=%s options=%s", self.send_mode, uuid, ac, options)
 
-    async def async_send_pair(self, uuid: str) -> None:
-        """Envoie la trame de pairing pour associer un périphérique commandable.
+    async def async_send_pair(self, uuid: str) -> bool:
+        """Envoie la trame de pairing à un périphérique commandable.
 
         Applicable aux modèles : dcl, shutter, plug, generic.
         Les switches (réception seule) n'ont pas de mécanisme de pairing.
+        La trame est une bascule : elle associe un module libre et désassocie un
+        module déjà associé. Retourne True si la trame a été émise.
         """
         uuid   = uuid.lower()
         device = self.devices.get(uuid)
         if device is None:
             _LOGGER.error("async_send_pair: device %s inconnu", uuid)
-            return
+            return False
         payload = craft_payload(
             {"uuid": device["uuid"].upper(), "model": device["model"]},
             "pair", self.jeedom_key, self.dongle_mac,
         )
         if not payload:
             _LOGGER.error("async_send_pair: payload vide pour uuid=%s", uuid)
-            return
+            return False
         self._last_pair_sent[uuid] = time.time()
+        # La réponse du module (codes 12/13) ne doit pas être écartée comme doublon
+        forget_dedupe(uuid)
         if not await self._dispatch_send(payload):
             _LOGGER.error("Odace SFSP PAIR [%s] : échec de l'envoi → uuid=%s", self.send_mode, uuid)
-            return
+            return False
         _LOGGER.info("Odace SFSP PAIR [%s] envoyé → uuid=%s", self.send_mode, uuid)
+        return True
 
-    async def start_unpair(self, uuid: str, timeout: float = 60.0) -> None:
-        """Active le mode désappariage pour un UUID donné.
+    def start_unpair(
+        self, uuid: str, press_timeout: float = 60.0, confirm_timeout: float = 15.0
+    ) -> asyncio.Future:
+        """Lance le désappairage d'un module et retourne un Future portant son résultat.
 
-        Le coordinateur attend la prochaine trame binding de ce device.
-        Quand elle arrive, il envoie une trame pair (toggle → désappairé)
-        puis retire le device de HA.
+        Déroulement :
+        1. attente d'un appui sur le bouton du module (trame binding), ``press_timeout`` s ;
+        2. envoi d'une seule trame pair (bascule → désappairé) ;
+        3. attente de la réponse du module, ``confirm_timeout`` s.
+
+        Le module n'est supprimé de HA que s'il confirme (code 13). Dans tous les
+        autres cas il est conservé. Résultat : une des constantes ``UNPAIR_*``.
         """
         uuid = uuid.lower()
+        future: asyncio.Future = self.hass.loop.create_future()
         if uuid not in self.devices:
             _LOGGER.error("start_unpair: device %s inconnu", uuid)
-            return
+            future.set_result(UNPAIR_UNKNOWN)
+            return future
+
+        # Un désappairage déjà en cours pour ce module est remplacé
+        self._finish_unpair(uuid, UNPAIR_NO_PRESS)
+        self._unpair_futures[uuid] = future
+        self._pending_unpair_confirm.discard(uuid)
         self._pending_unpair.add(uuid)
-        _LOGGER.info("Odace SFSP — désappariage en attente pour %s (%.0fs)", uuid, timeout)
+        self._unpair_confirm_timeout = confirm_timeout
+        _LOGGER.info("Odace SFSP — désappariage en attente pour %s (%.0fs)", uuid, press_timeout)
 
         async def _cancel_after_timeout() -> None:
-            await asyncio.sleep(timeout)
-            if uuid in self._pending_unpair:
+            await asyncio.sleep(press_timeout)
+            if uuid in self._pending_unpair and self._unpair_futures.get(uuid) is future:
                 self._pending_unpair.discard(uuid)
-                _LOGGER.info("Odace SFSP — désappariage annulé (timeout) pour %s", uuid)
+                _LOGGER.info("Odace SFSP — désappariage annulé (pas d'appui) pour %s", uuid)
+                self._finish_unpair(uuid, UNPAIR_NO_PRESS)
 
         self.hass.async_create_task(_cancel_after_timeout())
+        return future
 
-    async def _async_unpair_and_remove(self, uuid: str) -> None:
-        """Envoie la trame pair (toggle désappairé) puis attend la confirmation (code 13) avant de retirer."""
+    @callback
+    def _finish_unpair(self, uuid: str, result: str) -> None:
+        """Communique le résultat du désappairage à l'écran qui l'attend."""
+        future = self._unpair_futures.pop(uuid, None)
+        if future is not None and not future.done():
+            future.set_result(result)
+
+    async def _async_unpair_send(self, uuid: str) -> None:
+        """Envoie la trame pair du désappairage et attend la réponse du module."""
         uuid = uuid.lower()
-        await self.async_send_pair(uuid)
+        future = self._unpair_futures.get(uuid)
+        # Guetter la réponse AVANT l'envoi : le module peut répondre pendant les
+        # ~0,5 s que dure l'émission.
         self._pending_unpair_confirm.add(uuid)
+        if not await self.async_send_pair(uuid):
+            self._pending_unpair_confirm.discard(uuid)
+            self._finish_unpair(uuid, UNPAIR_SEND_FAILED)
+            return
         _LOGGER.info(
             "Odace SFSP — trame pair envoyée pour %s, attente confirmation désappariage (code 13)", uuid
         )
+        await asyncio.sleep(self._unpair_confirm_timeout)
+        if uuid in self._pending_unpair_confirm and self._unpair_futures.get(uuid) is future:
+            self._pending_unpair_confirm.discard(uuid)
+            _LOGGER.warning(
+                "Odace SFSP — pas de confirmation de désappariage pour %s : module conservé", uuid,
+            )
+            self._finish_unpair(uuid, UNPAIR_NO_ANSWER)
 
-        async def _remove_after_timeout() -> None:
-            await asyncio.sleep(15.0)
-            if uuid in self._pending_unpair_confirm:
-                self._pending_unpair_confirm.discard(uuid)
-                _LOGGER.warning(
-                    "Odace SFSP — pas de confirmation désappariage (code 13) pour %s après 15s,"
-                    " suppression forcée",
-                    uuid,
-                )
-                await self.async_remove_device(uuid)
-
-        self.hass.async_create_task(_remove_after_timeout())
+    async def _async_remove_unpaired(self, uuid: str) -> None:
+        """Supprime un module dont le désappairage est confirmé."""
+        await self.async_remove_device(uuid)
+        self._finish_unpair(uuid, UNPAIR_UNPAIRED)
 
     def was_commanded_recently(self, uuid: str, ac: str, window: float = 2.0) -> bool:
         """Anti-boucle : True si on vient d'envoyer cette commande pour ce uuid."""

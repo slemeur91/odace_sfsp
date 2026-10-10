@@ -4,7 +4,10 @@
       "user": {
         "title": "Odace SFSP — Mode d'envoi BLE",
         "description": "Choisissez comment les commandes BLE seront envoyées aux modules Schneider.",
-        "data": { "send_mode": "Mode d'envoi" }
+        "menu_options": {
+          "hci": "Contrôleur Bluetooth local (HAOS, Proxmox, USB)",
+          "esphome": "ESP32 BLE Proxy via API native ESPHome"
+        }
       },
       "hci": {
         "title": "Contrôleur Bluetooth local",
@@ -24,7 +27,9 @@
       "mqtt_broker": {
         "title": "Configuration ESP32/MQTT",
         "description": "L'ESP32 doit publier sa MAC sur `{mac_topic}` au démarrage (découverte automatique à l'étape suivante, délai {timeout}s).",
-        "data": { "mqtt_topic": "Topic MQTT d'envoi des commandes" }
+        "data": {
+          "mqtt_topic": "Topic MQTT d'envoi des commandes"
+        }
       },
       "mqtt_mac": {
         "title": "Adresse MAC de l'ESP32",
@@ -42,14 +47,24 @@
     },
     "error": {
       "invalid_mac": "Adresse MAC invalide — format attendu : AA:BB:CC:DD:EE:FF",
-      "invalid_uuid": "UUID invalide — 6 caractères hexadécimaux requis (ex : 9c0300). Vérifier que les octets ne sont pas inversés."
+      "invalid_uuid": "UUID invalide — 6 caractères hexadécimaux requis (ex : 9c0300), 8 pour une scène. Vérifier que les octets ne sont pas inversés."
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "Gérer les modules Odace SFSP",
-        "data": { "action": "Action" }
+        "menu_options": {
+          "add": "Ajouter un module",
+          "select_edit": "Modifier un module",
+          "select_remove": "Supprimer un module",
+          "rebind": "Réassocier un module",
+          "scenes": "Rechercher les scènes d'un module",
+          "network_hci": "Modifier le contrôleur Bluetooth",
+          "network_esphome": "Modifier la configuration ESPHome API",
+          "network_mqtt": "Modifier la configuration ESP32/MQTT",
+          "advanced": "Paramètres avancés"
+        }
       },
       "network": {
         "title": "Configuration réseau",
@@ -61,7 +76,10 @@
       },
       "advanced": {
         "title": "Paramètres avancés",
-        "data": { "action": "Action" }
+        "menu_options": {
+          "advanced_settings": "Modifier la clé Jeedom / MAC contrôleur",
+          "import_export": "Exporter / Importer les modules"
+        }
       },
       "advanced_settings": {
         "title": "Clé Jeedom / MAC contrôleur",
@@ -73,7 +91,7 @@
       },
       "import_export": {
         "title": "Exporter / Importer les modules",
-        "description": "{status}\n\nLes UUIDs déjà présents sont ignorés lors de l'import.",
+        "description": "**{count}** module(s) configuré(s). Copiez le champ Export pour sauvegarder la liste ; collez une liste dans le champ Import pour ajouter des modules.\n\nLes UUIDs déjà présents sont ignorés lors de l'import.",
         "data": {
           "export_json": "Export (copier)",
           "import_json": "Import (coller)"
@@ -81,17 +99,22 @@
       },
       "add": {
         "title": "Ajouter un module",
-        "description": "Modules BLE détectés récemment : **{pending}**\n\n**Format de l'UUID :**\n— Format **logs/Jeedom** : UUID tel qu'affiché dans les logs (ex : `9c0300`)\n— Format **étiquette module** : octets inversés (ex : `00039c` → converti en `9c0300`)\n\nSi un module détecté est sélectionné, le champ UUID est ignoré.",
+        "description": "Modules BLE détectés récemment : **{pending}** (« — » : aucun ; appuyer d'abord sur le bouton d'association du module)\n\n**Format de l'UUID :**\n— Format **logs/Jeedom** : UUID tel qu'affiché dans les logs (ex : `9c0300`)\n— Format **étiquette module** : octets inversés (ex : `00039c` → converti en `9c0300`)\n\nSi un module détecté est sélectionné, le champ UUID est ignoré. Une scène a un identifiant de 8 caractères ; le plus simple est de la retrouver par « Rechercher les scènes d'un module ».",
         "data": {
           "detected_uuid": "Module BLE détecté (optionnel)",
           "uuid_format": "Format de l'UUID saisi",
-          "uuid": "UUID (6 caractères hex)",
+          "uuid": "UUID (6 caractères hex, 8 pour une scène)",
           "name": "Nom (laissez vide pour nom automatique)",
           "model": "Modèle",
           "mac": "Adresse MAC BLE du module (optionnel)"
         }
       },
-      "select_edit": { "title": "Choisir un module à modifier", "data": { "uuid": "Module" } },
+      "select_edit": {
+        "title": "Choisir un module à modifier",
+        "data": {
+          "uuid": "Module"
+        }
+      },
       "edit": {
         "title": "Modifier le module",
         "description": "UUID actuel : `{current_uuid}` — Équivalent étiquette : `{reversed_uuid}`\n\nChoisissez le format dans lequel vous saisissez le nouvel UUID.",
@@ -100,23 +123,124 @@
           "uuid": "UUID",
           "name": "Nom",
           "model": "Modèle",
-          "mac": "Adresse MAC BLE"
+          "mac": "Adresse MAC BLE",
+          "scene_type": "Type de scène"
         }
       },
-      "select_remove": { "title": "Choisir un module à supprimer", "data": { "uuid": "Module" } }
+      "select_remove": {
+        "title": "Choisir un module à supprimer",
+        "data": {
+          "uuid": "Module"
+        }
+      },
+      "confirm_remove": {
+        "title": "Supprimer {name}",
+        "description": "Comment voulez-vous supprimer le module **{name}** (`{uuid}`) ?\n\n_Note : l'option « Désappairer » attend que vous appuyiez sur le bouton physique du module. Le module n'est supprimé de Home Assistant que s'il confirme le désappariage ; sinon il est conservé._",
+        "data": {
+          "action": "Action"
+        }
+      },
+      "scenes": {
+        "title": "Rechercher les scènes d'un module",
+        "description": "Home Assistant demande au module la liste des scènes qu'il a mémorisées, puis crée une entité scène pour chacune. La recherche dure quelques secondes.",
+        "data": {
+          "uuid": "Module à interroger",
+          "scene_kind": "Scènes à rechercher"
+        }
+      },
+      "scenes_result": {
+        "title": "Scènes trouvées",
+        "description": "Scènes annoncées par le module : **{found}** (« — » : aucune réponse ou aucune scène)\n\nNouvelles scènes créées : **{created}**"
+      },
+      "rebind": {
+        "title": "Réassocier un module",
+        "description": "À utiliser pour un module qui n'obéit plus à Home Assistant (réinitialisé, ou associé à un autre contrôleur).\n\nAprès validation, appuyez **une fois** sur le bouton physique du module : Home Assistant lui enverra la trame d'association.",
+        "data": {
+          "uuid": "Module"
+        }
+      }
     },
     "error": {
       "already_exists": "Un module avec cet UUID existe déjà",
       "invalid_key": "Clé Jeedom invalide — 24 caractères hexadécimaux requis",
       "invalid_mac": "Adresse MAC invalide — format attendu : AA:BB:CC:DD:EE:FF",
-      "invalid_uuid": "UUID invalide — 6 caractères hexadécimaux requis (ex : 9c0300). Vérifier que les octets ne sont pas inversés."
+      "invalid_uuid": "UUID invalide — 6 caractères hexadécimaux requis (ex : 9c0300), 8 pour une scène. Vérifier que les octets ne sont pas inversés.",
+      "send_failed": "La demande n'a pas pu être envoyée au module (voir les journaux)"
+    },
+    "abort": {
+      "no_esphome_device": "Aucun module ESPHome trouvé. Vérifiez que l'intégration ESPHome est configurée dans Home Assistant.",
+      "no_scene_source": "Aucun module capable de lister ses scènes (dcl, shutter ou generic) n'est configuré.",
+      "unpair_unpaired": "Le module **{name}** (`{uuid}`) a confirmé le désappariage. Il a été supprimé de Home Assistant.",
+      "unpair_paired": "Le module **{name}** (`{uuid}`) n'était pas associé : la trame vient de l'**associer** au lieu de le désappairer. Il est conservé dans Home Assistant.\n\nPour le désappairer, relancez « Désappairer le module puis supprimer de HA » et appuyez de nouveau sur son bouton.",
+      "unpair_no_press": "Aucun appui détecté sur le bouton du module **{name}** (`{uuid}`) en 60 secondes. Le désappariage est annulé et le module est conservé.",
+      "unpair_no_answer": "La trame de désappariage a été envoyée, mais le module **{name}** (`{uuid}`) n'a pas répondu. Il est conservé dans Home Assistant.\n\nRapprochez le contrôleur ou réessayez. Si le bouton n'est pas accessible, réinitialisez le module (appui de 10 s) puis choisissez « Supprimer de HA uniquement ».",
+      "unpair_send_failed": "La trame de désappariage n'a pas pu être envoyée (voir les journaux). Le module **{name}** (`{uuid}`) est conservé.",
+      "unpair_unknown": "Module `{uuid}` inconnu.",
+      "rebind_armed": "Appuyez **une fois** sur le bouton physique du module **{name}** (`{uuid}`) dans les 30 minutes : Home Assistant lui enverra la trame d'association.\n\nSi le module était encore associé, il se désassocie au lieu de s'associer. Une alerte apparaît alors dans **Paramètres → Réparations** : appuyez une seconde fois sur son bouton.",
+      "no_pairable_module": "Aucun module commandable (dcl, shutter, plug ou generic) n'est configuré."
+    },
+    "progress": {
+      "unpair_wait": "Appuyez **une fois** sur le bouton physique du module **{name}** (`{uuid}`), maintenant.\n\nHome Assistant attend l'appui pendant 60 secondes, envoie la trame de désappariage, puis attend la réponse du module. Cette fenêtre se met à jour toute seule."
+    }
+  },
+  "selector": {
+    "uuid_format": {
+      "options": {
+        "logs": "Format logs/Jeedom (ex : 9c0300)",
+        "label": "Format étiquette module (ex : 00039c)"
+      }
+    },
+    "detected_uuid": {
+      "options": {
+        "manual": "Saisir manuellement"
+      }
+    },
+    "remove_action": {
+      "options": {
+        "remove_only": "Supprimer de HA uniquement",
+        "unpair_and_remove": "Désappairer le module puis supprimer de HA"
+      }
+    },
+    "scene_kind": {
+      "options": {
+        "both": "Personnalisées et Schneider",
+        "custom": "Scènes personnalisées",
+        "schneider": "Scènes Schneider"
+      }
+    },
+    "scene_type": {
+      "options": {
+        "custom": "Personnalisée",
+        "schneider": "Schneider"
+      }
+    }
+  },
+  "issues": {
+    "module_unpaired": {
+      "title": "Module Odace {name} désassocié",
+      "description": "Le module **{name}** (`{uuid}`) était déjà associé : la trame d'association envoyée par Home Assistant l'a **désassocié**. Il n'obéit plus aux commandes.\n\nAppuyez une nouvelle fois sur son bouton physique dans les 30 minutes : Home Assistant le réassociera et cette alerte disparaîtra. Passé ce délai, utilisez **Configurer → Réassocier un module**."
     }
   },
   "services": {
-    "send_command": { "name": "Envoyer une commande", "description": "Envoie une trame BLE Odace SFSP" },
-    "start_learn": { "name": "Mode apprentissage", "description": "Active l'inclusion (60 s par défaut)" },
-    "add_device": { "name": "Ajouter un module", "description": "Ajoute manuellement un module" },
-    "remove_device": { "name": "Supprimer un module", "description": "Supprime un module" },
-    "bind_device": { "name": "Associer un module", "description": "Envoie la trame d'association BLE" }
+    "send_command": {
+      "name": "Envoyer une commande",
+      "description": "Envoie une trame BLE Odace SFSP"
+    },
+    "start_learn": {
+      "name": "Mode apprentissage",
+      "description": "Active l'inclusion (60 s par défaut)"
+    },
+    "add_device": {
+      "name": "Ajouter un module",
+      "description": "Ajoute manuellement un module"
+    },
+    "remove_device": {
+      "name": "Supprimer un module",
+      "description": "Supprime un module"
+    },
+    "bind_device": {
+      "name": "Associer un module",
+      "description": "Envoie la trame d'association BLE"
+    }
   }
 }

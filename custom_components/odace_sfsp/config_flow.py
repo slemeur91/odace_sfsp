@@ -21,6 +21,7 @@ Rétrocompatibilité :
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -30,7 +31,12 @@ from typing import Any, Dict
 import voluptuous as vol
 
 from homeassistant import config_entries
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.selector import (
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
     TextSelector,
     TextSelectorConfig,
 )
@@ -54,6 +60,9 @@ from .const import (
     DEFAULT_HCI,
     DEFAULT_MQTT_TOPIC,
     DOMAIN,
+    MODEL_SCENE,
+    PAIRABLE_MODELS,
+    SCENE_SOURCE_MODELS,
     SEND_MODE_ESPHOME_API,
     SEND_MODE_HCI,
     SEND_MODE_MQTT,
@@ -63,6 +72,8 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 _MAC_RE  = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 _UUID_RE = re.compile(r"^[0-9A-Fa-f]{6}$")
+# Une scène n'est pas un module : son identifiant fait 4 octets (8 caractères hex)
+_SCENE_UUID_RE = re.compile(r"^[0-9A-Fa-f]{8}$")
 # Clé Jeedom : 12 octets, soit 24 caractères hexadécimaux (complète la clé AES-128)
 _KEY_RE  = re.compile(r"^[0-9A-Fa-f]{24}$")
 _NULL_MAC = "00:00:00:00:00:00"
@@ -75,13 +86,32 @@ def _is_valid_mac(mac: str) -> bool:
     return bool(_MAC_RE.match(mac.strip()))
 
 
-def _is_valid_uuid(uuid: str) -> bool:
-    return bool(_UUID_RE.match(uuid.strip()))
+def _is_valid_uuid(uuid: str, model: str = "") -> bool:
+    """6 caractères hex pour un module, 8 pour une scène."""
+    pattern = _SCENE_UUID_RE if model == MODEL_SCENE else _UUID_RE
+    return bool(pattern.match(uuid.strip()))
 
 
 def _reverse_uuid(uuid_hex: str) -> str:
+    """Inverse l'ordre des octets (format étiquette ↔ format logs)."""
     h = uuid_hex.lower()
-    return h[4:6] + h[2:4] + h[0:2]
+    return "".join(reversed([h[i : i + 2] for i in range(0, len(h), 2)]))
+
+
+def _select(translation_key: str, options: list) -> SelectSelector:
+    """Liste déroulante dont les libellés viennent des fichiers de traduction.
+
+    ``options`` est soit une liste de valeurs (traduites via
+    ``selector.<translation_key>``), soit une liste de SelectOptionDict dont le
+    libellé sert de repli quand la valeur n'a pas de traduction (entrées dynamiques).
+    """
+    return SelectSelector(
+        SelectSelectorConfig(
+            options=options,
+            translation_key=translation_key,
+            mode=SelectSelectorMode.DROPDOWN,
+        )
+    )
 
 
 def _normalize_uuid(uuid_raw: str, fmt: str) -> str:
@@ -178,36 +208,14 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
-    def __init__(self) -> None:
-        super().__init__()
-        self._send_mode: str = SEND_MODE_HCI
-
     # ------------------------------------------------------------------
-    # Étape 1 : choix du mode
+    # Étape 1 : choix du mode (menu traduit)
     # v2 : SEND_MODE_MQTT retiré — seuls HCI et ESPHome API sont proposés
     # ------------------------------------------------------------------
     async def async_step_user(
         self, user_input: Dict[str, Any] | None = None
     ) -> FlowResult:
-        if user_input is not None:
-            self._send_mode = user_input[CONF_SEND_MODE]
-            if self._send_mode == SEND_MODE_ESPHOME_API:
-                return await self.async_step_esphome()
-            return await self.async_step_hci()
-
-        return self.async_show_form(
-            step_id="user",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_SEND_MODE, default=SEND_MODE_HCI): vol.In(
-                        {
-                            SEND_MODE_HCI:         "Contrôleur Bluetooth local (HAOS, Proxmox, USB)",
-                            SEND_MODE_ESPHOME_API: "ESP32 BLE Proxy via API native ESPHome",
-                        }
-                    )
-                }
-            ),
-        )
+        return self.async_show_menu(step_id="user", menu_options=["hci", "esphome"])
 
     # ------------------------------------------------------------------
     # Branche HCI
@@ -240,7 +248,10 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="hci",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_HCI, default=DEFAULT_HCI): vol.In(adapters_labels),
+                    vol.Required(
+                        CONF_HCI,
+                        default=DEFAULT_HCI if DEFAULT_HCI in adapters_labels else next(iter(adapters_labels)),
+                    ): vol.In(adapters_labels),
                 }
             ),
             description_placeholders={
@@ -271,7 +282,7 @@ class OdaceSFSPConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         for eid, title in esphome_entries.items():
             mac = _guess_esphome_bt_mac(self.hass, eid)
             esphome_macs[eid] = mac
-            esphome_labels[eid] = f"{title} — BT: {mac}" if mac else f"{title} — BT: inconnue"
+            esphome_labels[eid] = f"{title} — BT: {mac or '?'}"
 
         default_entry = next(iter(esphome_entries))
 
@@ -344,6 +355,9 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
         self.entry = entry
         self._editing: str = ""
         self._remove_uuid: str = ""
+        self._scenes_result: Dict[str, list] = {"found": [], "created": []}
+        self._unpair_task: asyncio.Task | None = None
+        self._unpair_name: str = ""
 
     # ------------------------------------------------------------------
     # Menu principal
@@ -351,38 +365,25 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(
         self, user_input: Dict[str, Any] | None = None
     ) -> FlowResult:
+        # Une entrée de menu par mode d'envoi : chacune a son libellé traduit.
         send_mode = self.entry.data.get(CONF_SEND_MODE, SEND_MODE_HCI)
-        if send_mode == SEND_MODE_MQTT:
-            network_label = "Modifier la configuration ESP32/MQTT"
-        elif send_mode == SEND_MODE_ESPHOME_API:
-            network_label = "Modifier la configuration ESPHome API"
-        else:
-            network_label = "Modifier le contrôleur Bluetooth"
-
-        if user_input is not None:
-            action = user_input["action"]
-            if action == "network":  return await self.async_step_network()
-            if action == "add":      return await self.async_step_add()
-            if action == "edit":     return await self.async_step_select_edit()
-            if action == "remove":   return await self.async_step_select_remove()
-            if action == "advanced": return await self.async_step_advanced()
-
-        return self.async_show_form(
+        network_step = {
+            SEND_MODE_MQTT:        "network_mqtt",
+            SEND_MODE_ESPHOME_API: "network_esphome",
+        }.get(send_mode, "network_hci")
+        return self.async_show_menu(
             step_id="init",
-            data_schema=vol.Schema(
-                {
-                    vol.Required("action", default="add"): vol.In(
-                        {
-                            "add":      "Ajouter un module",
-                            "edit":     "Modifier un module",
-                            "remove":   "Supprimer un module",
-                            "network":  network_label,
-                            "advanced": "Paramètres avancés",
-                        }
-                    )
-                }
-            ),
+            menu_options=["add", "select_edit", "select_remove", "rebind", "scenes", network_step, "advanced"],
         )
+
+    async def async_step_network_hci(self, user_input=None) -> FlowResult:
+        return await self.async_step_network(user_input)
+
+    async def async_step_network_esphome(self, user_input=None) -> FlowResult:
+        return await self.async_step_network(user_input)
+
+    async def async_step_network_mqtt(self, user_input=None) -> FlowResult:
+        return await self.async_step_network(user_input)
 
     # ------------------------------------------------------------------
     # Configuration réseau
@@ -429,7 +430,7 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
             for eid, title in esphome_entries.items():
                 mac = _guess_esphome_bt_mac(self.hass, eid)
                 esphome_macs[eid] = mac
-                esphome_labels[eid] = f"{title} — BT: {mac}" if mac else f"{title} — BT: inconnue"
+                esphome_labels[eid] = f"{title} — BT: {mac or '?'}"
 
             available_services = _list_esphome_services(self.hass, default_entry)
 
@@ -503,23 +504,8 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
         self, user_input: Dict[str, Any] | None = None
     ) -> FlowResult:
         """Menu des paramètres avancés."""
-        if user_input is not None:
-            action = user_input["action"]
-            if action == "settings":      return await self.async_step_advanced_settings()
-            if action == "import_export": return await self.async_step_import_export()
-
-        return self.async_show_form(
-            step_id="advanced",
-            data_schema=vol.Schema(
-                {
-                    vol.Required("action", default="settings"): vol.In(
-                        {
-                            "settings":      "Modifier la clé Jeedom / MAC contrôleur",
-                            "import_export": "Exporter / Importer les modules",
-                        }
-                    )
-                }
-            ),
+        return self.async_show_menu(
+            step_id="advanced", menu_options=["advanced_settings", "import_export"]
         )
 
     async def async_step_advanced_settings(
@@ -556,7 +542,7 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
             ),
             errors=errors,
             description_placeholders={
-                "current_key": current_key or "(non définie)",
+                "current_key": current_key or "—",
                 "current_mac": current_mac,
             },
         )
@@ -651,10 +637,10 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                     name  = entry.get("name", "").strip()
                     mac   = entry.get("mac", "").strip()
 
-                    if not _is_valid_uuid(uuid):
+                    if model not in SUPPORTED_MODELS:
                         invalid.append(key)
                         continue
-                    if model not in SUPPORTED_MODELS:
+                    if not _is_valid_uuid(uuid, model):
                         invalid.append(key)
                         continue
                     if not name:
@@ -685,11 +671,6 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                 )
                 return self.async_create_entry(title="", data={})
 
-        if coord.devices:
-            status_msg = f"{len(coord.devices)} module(s) configuré(s) — copiez le champ Export pour sauvegarder la liste."
-        else:
-            status_msg = "Aucun module configuré. Collez votre liste dans le champ Import pour ajouter vos modules."
-
         _textarea = TextSelector(TextSelectorConfig(multiline=True))
         return self.async_show_form(
             step_id="import_export",
@@ -701,7 +682,7 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
             ),
             errors=errors,
             description_placeholders={
-                "status": status_msg,
+                "count": str(len(coord.devices)),
             },
         )
 
@@ -715,11 +696,13 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
         errors: Dict[str, str] = {}
 
         pending = coord.get_pending_uuids()
-        detected_choices: Dict[str, str] = {
-            p["uuid"]: f"{p['uuid']} ({p['model']}, il y a {p['seconds_ago']}s)"
+        # Modules détectés : libellés neutres ; « manual » est traduit
+        detected_options: list = [
+            SelectOptionDict(value=p["uuid"], label=f"{p['uuid']} ({p['model']}, {p['seconds_ago']} s)")
             for p in pending
-        }
-        detected_choices["manual"] = "Saisir manuellement"
+        ]
+        # Libellé de repli si la traduction manque ; sinon « selector.detected_uuid »
+        detected_options.append(SelectOptionDict(value="manual", label="Manuel / Manual"))
 
         if user_input is not None:
             selected = user_input.get("detected_uuid", "manual")
@@ -730,47 +713,41 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                 raw_uuid = user_input.get(CONF_UUID, "").strip()
                 uuid_fmt = user_input.get("uuid_format", _UUID_FORMAT_LOGS)
 
-            uuid = _normalize_uuid(raw_uuid, uuid_fmt) if raw_uuid else ""
+            uuid  = _normalize_uuid(raw_uuid, uuid_fmt) if raw_uuid else ""
+            model = user_input.get(CONF_MODEL, "dcl")
 
-            if not uuid or not _is_valid_uuid(uuid):
+            if not uuid or not _is_valid_uuid(uuid, model):
                 errors[CONF_UUID] = "invalid_uuid"
             elif uuid in coord.devices:
                 errors["base"] = "already_exists"
             else:
                 name  = user_input.get(CONF_NAME, "").strip()
-                model = user_input.get(CONF_MODEL, "dcl")
                 if not name:
                     name = f"Odace SFSP {model} {uuid}"
                 await coord.async_add_device(
                     {CONF_UUID: uuid, CONF_MAC: user_input.get(CONF_MAC, ""), CONF_MODEL: model, CONF_NAME: name}
                 )
+                # Module « à associer » : la trame d'association part au prochain
+                # appui sur son bouton (ou tout de suite s'il clignote encore).
+                coord.mark_awaiting_pair(uuid)
                 return self.async_create_entry(title="", data={})
 
         default_uuid  = pending[0]["uuid"]  if len(pending) == 1 else ""
         default_model = pending[0]["model"] if len(pending) == 1 else "dcl"
 
-        schema_fields: Dict[Any, Any] = {}
-        if detected_choices:
-            default_detected = pending[0]["uuid"] if len(pending) == 1 else "manual"
-            schema_fields[vol.Required("detected_uuid", default=default_detected)] = vol.In(detected_choices)
+        default_detected = pending[0]["uuid"] if len(pending) == 1 else "manual"
+        schema_fields: Dict[Any, Any] = {
+            vol.Required("detected_uuid", default=default_detected): _select("detected_uuid", detected_options),
+            vol.Required("uuid_format", default=_UUID_FORMAT_LOGS): _select(
+                "uuid_format", [_UUID_FORMAT_LOGS, _UUID_FORMAT_LABEL]
+            ),
+            vol.Optional(CONF_UUID, default=default_uuid): str,
+            vol.Optional(CONF_NAME, default=""): str,
+            vol.Required(CONF_MODEL, default=default_model): vol.In(SUPPORTED_MODELS),
+            vol.Optional(CONF_MAC, default=""): str,
+        }
 
-        schema_fields.update(
-            {
-                vol.Required("uuid_format", default=_UUID_FORMAT_LOGS): vol.In(
-                    {_UUID_FORMAT_LOGS: "Format logs/Jeedom (ex : 9c0300)", _UUID_FORMAT_LABEL: "Format étiquette module (ex : 00039c)"}
-                ),
-                vol.Optional(CONF_UUID, default=default_uuid): str,
-                vol.Optional(CONF_NAME, default=""): str,
-                vol.Required(CONF_MODEL, default=default_model): vol.In(SUPPORTED_MODELS),
-                vol.Optional(CONF_MAC, default=""): str,
-            }
-        )
-
-        pending_info  = (
-            ", ".join(f"{p['uuid']} ({p['model']})" for p in pending)
-            if pending
-            else "aucun (appuyer sur le bouton d'association du module)"
-        )
+        pending_info  = ", ".join(f"{p['uuid']} ({p['model']})" for p in pending) if pending else "—"
         reversed_hint = _reverse_uuid(pending[0]["uuid"]) if len(pending) == 1 else "—"
 
         return self.async_show_form(
@@ -804,10 +781,13 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
             uuid_fmt = user_input.get("uuid_format", _UUID_FORMAT_LOGS)
             new_uuid = _normalize_uuid(raw_uuid, uuid_fmt)
 
-            if not _is_valid_uuid(new_uuid):
+            if not _is_valid_uuid(new_uuid, user_input[CONF_MODEL]):
                 errors[CONF_UUID] = "invalid_uuid"
             else:
                 updates = {CONF_NAME: user_input[CONF_NAME], CONF_MODEL: user_input[CONF_MODEL], CONF_MAC: user_input.get(CONF_MAC, "")}
+                if user_input[CONF_MODEL] == MODEL_SCENE:
+                    # Type de scène (custom/schneider) : détermine le paramètre de la trame
+                    updates["type"] = user_input.get("scene_type", current.get("type", "custom"))
                 model_changed = user_input[CONF_MODEL] != current.get("model")
                 uuid_changed  = new_uuid != self._editing
                 name_changed  = user_input[CONF_NAME] != current.get("name")
@@ -835,19 +815,22 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                 return self.async_create_entry(title="", data={})
 
         reversed_current = _reverse_uuid(self._editing)
+        edit_fields: Dict[Any, Any] = {
+            vol.Required("uuid_format", default=_UUID_FORMAT_LOGS): _select(
+                "uuid_format", [_UUID_FORMAT_LOGS, _UUID_FORMAT_LABEL]
+            ),
+            vol.Required(CONF_UUID, default=self._editing): str,
+            vol.Required(CONF_NAME, default=current.get("name", "")): str,
+            vol.Required(CONF_MODEL, default=current.get("model", "dcl")): vol.In(SUPPORTED_MODELS),
+            vol.Optional(CONF_MAC, default=current.get("mac", "")): str,
+        }
+        if current.get("model") == MODEL_SCENE:
+            edit_fields[vol.Required("scene_type", default=current.get("type", "custom"))] = _select(
+                "scene_type", ["custom", "schneider"]
+            )
         return self.async_show_form(
             step_id="edit",
-            data_schema=vol.Schema(
-                {
-                    vol.Required("uuid_format", default=_UUID_FORMAT_LOGS): vol.In(
-                        {_UUID_FORMAT_LOGS: "Format logs/Jeedom (ex : 9c0300)", _UUID_FORMAT_LABEL: "Format étiquette module (ex : 00039c)"}
-                    ),
-                    vol.Required(CONF_UUID, default=self._editing): str,
-                    vol.Required(CONF_NAME, default=current.get("name", "")): str,
-                    vol.Required(CONF_MODEL, default=current.get("model", "dcl")): vol.In(SUPPORTED_MODELS),
-                    vol.Optional(CONF_MAC, default=current.get("mac", "")): str,
-                }
-            ),
+            data_schema=vol.Schema(edit_fields),
             errors=errors,
             description_placeholders={"current_uuid": self._editing, "reversed_uuid": reversed_current},
         )
@@ -871,30 +854,129 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
         uuid = self._remove_uuid
         if user_input is not None:
             if user_input["action"] == "unpair_and_remove":
-                await coord.start_unpair(uuid)
+                self._unpair_task = None
                 return await self.async_step_unpair_instructions()
-            else:
-                await coord.async_remove_device(uuid)
-                return self.async_create_entry(title="", data={})
+            await coord.async_remove_device(uuid)
+            return self.async_create_entry(title="", data={})
         device = coord.devices.get(uuid, {})
         name = device.get("name", uuid)
+        # Seuls les modules commandables s'associent au contrôleur : rien à
+        # désappairer pour une scène ou un interrupteur.
+        actions = ["remove_only"]
+        if device.get("model") in PAIRABLE_MODELS:
+            actions.append("unpair_and_remove")
         return self.async_show_form(
             step_id="confirm_remove",
             description_placeholders={"name": name, "uuid": uuid},
             data_schema=vol.Schema({
-                vol.Required("action", default="remove_only"): vol.In({
-                    "remove_only": "Supprimer de HA uniquement",
-                    "unpair_and_remove": "Désappairer le module puis supprimer de HA",
-                }),
+                vol.Required("action", default="remove_only"): _select("remove_action", actions),
             }),
         )
 
     async def async_step_unpair_instructions(self, user_input=None) -> FlowResult:
+        """Écran d'attente du désappairage : appui sur le module puis réponse."""
+        coord = self.hass.data[DOMAIN][self.entry.entry_id]
+        uuid = self._remove_uuid
+        if self._unpair_task is None:
+            self._unpair_name = coord.devices.get(uuid, {}).get("name", uuid)
+            self._unpair_task = self.hass.async_create_task(self._async_wait_unpair(coord, uuid))
+        if not self._unpair_task.done():
+            return self.async_show_progress(
+                step_id="unpair_instructions",
+                progress_action="unpair_wait",
+                progress_task=self._unpair_task,
+                description_placeholders={"uuid": uuid, "name": self._unpair_name},
+            )
+        return self.async_show_progress_done(next_step_id="unpair_finish")
+
+    @staticmethod
+    async def _async_wait_unpair(coord, uuid: str) -> str:
+        return await coord.start_unpair(uuid)
+
+    async def async_step_unpair_finish(self, user_input=None) -> FlowResult:
+        """Affiche le résultat du désappairage (un message par issue)."""
+        try:
+            result = self._unpair_task.result() if self._unpair_task else "no_press"
+        except Exception:  # noqa: BLE001 - tâche annulée ou en erreur
+            result = "no_answer"
+        self._unpair_task = None
+        return self.async_abort(
+            reason=f"unpair_{result}",
+            description_placeholders={"uuid": self._remove_uuid, "name": self._unpair_name},
+        )
+
+    # ------------------------------------------------------------------
+    # Réassociation d'un module (pose la marque « à associer »)
+    # ------------------------------------------------------------------
+    async def async_step_rebind(self, user_input=None) -> FlowResult:
+        coord = self.hass.data[DOMAIN][self.entry.entry_id]
+        choices = {
+            uid: f"{d.get('name','?')} [{d.get('model','?')}]"
+            for uid, d in coord.devices.items()
+            if d.get("model") in PAIRABLE_MODELS
+        }
+        if not choices:
+            return self.async_abort(reason="no_pairable_module")
+        if user_input is not None:
+            uuid = user_input["uuid"]
+            coord.mark_awaiting_pair(uuid)
+            return self.async_abort(
+                reason="rebind_armed",
+                description_placeholders={"uuid": uuid, "name": coord.devices[uuid].get("name", uuid)},
+            )
+        return self.async_show_form(
+            step_id="rebind",
+            data_schema=vol.Schema({vol.Required("uuid"): vol.In(choices)}),
+        )
+
+    # ------------------------------------------------------------------
+    # Recherche des scènes mémorisées par un module
+    # ------------------------------------------------------------------
+    async def async_step_scenes(self, user_input=None) -> FlowResult:
+        """Interroge un module et crée les scènes qu'il annonce (comme Jeedom)."""
+        coord = self.hass.data[DOMAIN][self.entry.entry_id]
+        errors: Dict[str, str] = {}
+        choices = {
+            uid: f"{d.get('name','?')} [{d.get('model','?')}]"
+            for uid, d in coord.devices.items()
+            if d.get("model") in SCENE_SOURCE_MODELS
+        }
+        if not choices:
+            return self.async_abort(reason="no_scene_source")
+
+        if user_input is not None:
+            scene_types = {"custom": ["custom"], "schneider": ["schneider"]}.get(
+                user_input["scene_kind"], ["custom", "schneider"]
+            )
+            try:
+                self._scenes_result = await coord.async_discover_scenes(user_input["uuid"], scene_types)
+            except HomeAssistantError:
+                errors["base"] = "send_failed"
+            else:
+                return await self.async_step_scenes_result()
+
+        return self.async_show_form(
+            step_id="scenes",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("uuid"): vol.In(choices),
+                    vol.Required("scene_kind", default="both"): _select(
+                        "scene_kind", ["both", "custom", "schneider"]
+                    ),
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_scenes_result(self, user_input=None) -> FlowResult:
         if user_input is not None:
             return self.async_create_entry(title="", data={})
-        uuid = self._remove_uuid
+        result = self._scenes_result
         return self.async_show_form(
-            step_id="unpair_instructions",
-            description_placeholders={"uuid": uuid},
+            step_id="scenes_result",
             data_schema=vol.Schema({}),
+            description_placeholders={
+                "found":   ", ".join(result["found"]) or "—",
+                "created": str(len(result["created"])),
+            },
         )

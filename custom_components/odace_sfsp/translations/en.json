@@ -4,8 +4,9 @@
       "user": {
         "title": "Odace SFSP — BLE send mode",
         "description": "Choose how BLE commands will be sent to Schneider modules.",
-        "data": {
-          "send_mode": "Send mode"
+        "menu_options": {
+          "hci": "Local Bluetooth controller (HAOS, Proxmox, USB)",
+          "esphome": "ESP32 BLE proxy through the native ESPHome API"
         }
       },
       "hci": {
@@ -46,15 +47,23 @@
     },
     "error": {
       "invalid_mac": "Invalid MAC address — expected format: AA:BB:CC:DD:EE:FF",
-      "invalid_uuid": "Invalid UUID — 6 hex characters required (e.g. 9c0300). Check that the bytes are not reversed."
+      "invalid_uuid": "Invalid UUID — 6 hex characters required (e.g. 9c0300), 8 for a scene. Check that the bytes are not reversed."
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "Manage Odace SFSP modules",
-        "data": {
-          "action": "Action"
+        "menu_options": {
+          "add": "Add a module",
+          "select_edit": "Edit a module",
+          "select_remove": "Remove a module",
+          "rebind": "Re-pair a module",
+          "scenes": "Search a module's scenes",
+          "network_hci": "Change the Bluetooth controller",
+          "network_esphome": "Change the ESPHome API configuration",
+          "network_mqtt": "Change the ESP32/MQTT configuration",
+          "advanced": "Advanced settings"
         }
       },
       "network": {
@@ -67,8 +76,9 @@
       },
       "advanced": {
         "title": "Advanced settings",
-        "data": {
-          "action": "Action"
+        "menu_options": {
+          "advanced_settings": "Change the Jeedom key / controller MAC",
+          "import_export": "Export / Import modules"
         }
       },
       "advanced_settings": {
@@ -81,7 +91,7 @@
       },
       "import_export": {
         "title": "Export / Import modules",
-        "description": "{status}\n\nExisting UUIDs are skipped during import.",
+        "description": "**{count}** module(s) configured. Copy the Export field to back up the list; paste a list into the Import field to add modules.\n\nUUIDs already present are ignored on import.",
         "data": {
           "export_json": "Export (copy)",
           "import_json": "Import (paste)"
@@ -89,11 +99,11 @@
       },
       "add": {
         "title": "Add a module",
-        "description": "Recently detected BLE modules: **{pending}**\n\n**UUID format:**\n— **Logs/Jeedom** format: UUID as shown in logs (e.g. `9c0300`)\n— **Module label** format: reversed bytes (e.g. `00039c` → converted to `9c0300`)\n\nIf a detected module is selected, the UUID field is ignored.",
+        "description": "Recently detected BLE modules: **{pending}** (\"—\": none; press the module's pairing button first)\n\n**UUID format:**\n— **logs/Jeedom** format: UUID as shown in the logs (e.g. `9c0300`)\n— **module label** format: reversed bytes (e.g. `00039c` → converted to `9c0300`)\n\nIf a detected module is selected, the UUID field is ignored. A scene has an 8-character identifier; the easiest way is to find it with \"Search a module's scenes\".",
         "data": {
           "detected_uuid": "Detected BLE module (optional)",
           "uuid_format": "UUID input format",
-          "uuid": "UUID (6 hex characters)",
+          "uuid": "UUID (6 hex characters, 8 for a scene)",
           "name": "Name (leave empty for automatic name)",
           "model": "Model",
           "mac": "BLE MAC address of the module (optional)"
@@ -113,7 +123,8 @@
           "uuid": "UUID",
           "name": "Name",
           "model": "Model",
-          "mac": "BLE MAC address"
+          "mac": "BLE MAC address",
+          "scene_type": "Scene type"
         }
       },
       "select_remove": {
@@ -124,21 +135,90 @@
       },
       "confirm_remove": {
         "title": "Remove {name}",
-        "description": "How do you want to remove module **{name}** (`{uuid}`)?\n\n_Note: the \"Unpair\" option waits for you to press the physical button on the module. The module is removed from Home Assistant as soon as it confirms unpairing (code 13). Without confirmation within 15 seconds of the button press, removal is forced._",
+        "description": "How do you want to remove module **{name}** (`{uuid}`)?\n\n_Note: the \"Unpair\" option waits for you to press the physical button on the module. The module is removed from Home Assistant only if it confirms unpairing; otherwise it is kept._",
         "data": {
           "action": "Action"
         }
       },
-      "unpair_instructions": {
-        "title": "Unpairing in progress",
-        "description": "Press the **physical button** on module `{uuid}` within **60 seconds** to confirm unpairing.\n\nThe module will be unpaired and automatically removed from Home Assistant.\n\n_If the physical button is not accessible, perform a long reset (10 s) on the module, then manually delete the device in HA._"
+      "scenes": {
+        "title": "Search a module's scenes",
+        "description": "Home Assistant asks the module for the scenes it has stored, then creates a scene entity for each one. The search takes a few seconds.",
+        "data": {
+          "uuid": "Module to query",
+          "scene_kind": "Scenes to search"
+        }
+      },
+      "scenes_result": {
+        "title": "Scenes found",
+        "description": "Scenes announced by the module: **{found}** (\"—\": no reply or no scene)\n\nNew scenes created: **{created}**"
+      },
+      "rebind": {
+        "title": "Re-pair a module",
+        "description": "Use this for a module that no longer obeys Home Assistant (reset, or paired with another controller).\n\nAfter confirming, press the module's physical button **once**: Home Assistant will send it the pairing frame.",
+        "data": {
+          "uuid": "Module"
+        }
       }
     },
     "error": {
       "already_exists": "A module with this UUID already exists",
       "invalid_key": "Invalid Jeedom key — 24 hex characters required",
       "invalid_mac": "Invalid MAC address — expected format: AA:BB:CC:DD:EE:FF",
-      "invalid_uuid": "Invalid UUID — 6 hex characters required (e.g. 9c0300). Check that the bytes are not reversed."
+      "invalid_uuid": "Invalid UUID — 6 hex characters required (e.g. 9c0300), 8 for a scene. Check that the bytes are not reversed.",
+      "send_failed": "The request could not be sent to the module (see the logs)"
+    },
+    "abort": {
+      "no_esphome_device": "No ESPHome device found. Check that the ESPHome integration is configured in Home Assistant.",
+      "no_scene_source": "No module able to list its scenes (dcl, shutter or generic) is configured.",
+      "unpair_unpaired": "Module **{name}** (`{uuid}`) confirmed unpairing. It has been removed from Home Assistant.",
+      "unpair_paired": "Module **{name}** (`{uuid}`) was not paired: the frame has just **paired** it instead of unpairing it. It is kept in Home Assistant.\n\nTo unpair it, run \"Unpair the module, then remove from HA\" again and press its button once more.",
+      "unpair_no_press": "No press detected on the button of module **{name}** (`{uuid}`) within 60 seconds. Unpairing is cancelled and the module is kept.",
+      "unpair_no_answer": "The unpairing frame was sent, but module **{name}** (`{uuid}`) did not reply. It is kept in Home Assistant.\n\nMove the controller closer or try again. If the button cannot be reached, reset the module (10 s press) then choose \"Remove from HA only\".",
+      "unpair_send_failed": "The unpairing frame could not be sent (see the logs). Module **{name}** (`{uuid}`) is kept.",
+      "unpair_unknown": "Unknown module `{uuid}`.",
+      "rebind_armed": "Press the physical button of module **{name}** (`{uuid}`) **once** within 30 minutes: Home Assistant will send it the pairing frame.\n\nIf the module was still paired, it unpairs instead of pairing. An alert then appears in **Settings → Repairs**: press its button a second time.",
+      "no_pairable_module": "No controllable module (dcl, shutter, plug or generic) is configured."
+    },
+    "progress": {
+      "unpair_wait": "Press the physical button of module **{name}** (`{uuid}`) **once**, now.\n\nHome Assistant waits 60 seconds for the press, sends the unpairing frame, then waits for the module's reply. This window updates by itself."
+    }
+  },
+  "selector": {
+    "uuid_format": {
+      "options": {
+        "logs": "Logs/Jeedom format (e.g. 9c0300)",
+        "label": "Module label format (e.g. 00039c)"
+      }
+    },
+    "detected_uuid": {
+      "options": {
+        "manual": "Enter manually"
+      }
+    },
+    "remove_action": {
+      "options": {
+        "remove_only": "Remove from HA only",
+        "unpair_and_remove": "Unpair the module, then remove from HA"
+      }
+    },
+    "scene_kind": {
+      "options": {
+        "both": "Custom and Schneider",
+        "custom": "Custom scenes",
+        "schneider": "Schneider scenes"
+      }
+    },
+    "scene_type": {
+      "options": {
+        "custom": "Custom",
+        "schneider": "Schneider"
+      }
+    }
+  },
+  "issues": {
+    "module_unpaired": {
+      "title": "Odace module {name} unpaired",
+      "description": "Module **{name}** (`{uuid}`) was already paired: the pairing frame sent by Home Assistant has **unpaired** it. It no longer obeys commands.\n\nPress its physical button once more within 30 minutes: Home Assistant will pair it again and this alert will disappear. After that delay, use **Configure → Re-pair a module**."
     }
   },
   "services": {

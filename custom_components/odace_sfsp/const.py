@@ -51,6 +51,18 @@ MODEL_GENERIC = "generic"
 MODEL_PLUG = "plug"
 MODEL_SCENE = "scene"
 
+# Modèles commandables : ce sont les seuls à s'associer au contrôleur
+PAIRABLE_MODELS = (MODEL_DCL, MODEL_SHUTTER, MODEL_PLUG, MODEL_GENERIC)
+
+# Modèles capables de lister leurs scènes (réponse décodée par le parseur)
+SCENE_SOURCE_MODELS = (MODEL_DCL, MODEL_SHUTTER, MODEL_GENERIC)
+
+# Commande à envoyer à un module pour obtenir ses scènes, par type de scène
+SCENE_QUERY_AC = {
+    "custom": "customerScenes",
+    "schneider": "schneiderScenes",
+}
+
 SUPPORTED_MODELS = [
     MODEL_DCL,
     MODEL_SWITCH,

@@ -24,6 +24,7 @@ from .const import (
     DEFAULT_HCI,
     DEFAULT_MQTT_TOPIC,
     DOMAIN,
+    MODEL_SCENE,
     SEND_MODE_HCI,
     SUPPORTED_MODELS,
 )
@@ -74,7 +75,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 # passerelle concernée à chaque appel : avec plusieurs passerelles, ils ne sont
 # plus liés à la dernière configurée ni supprimés quand une seule est déchargée.
 
-_UUID = vol.All(cv.string, vol.Strip, vol.Lower, vol.Match(r"^[0-9a-f]{6}$"))
+# 6 caractères hex pour un module, 8 pour une scène
+_UUID = vol.All(cv.string, vol.Strip, vol.Lower, vol.Match(r"^[0-9a-f]{6}([0-9a-f]{2})?$"))
 
 _SERVICE_SCHEMAS = {
     "send_command": vol.Schema(
@@ -133,6 +135,10 @@ def _async_register_services(hass: HomeAssistant) -> None:
 
     async def _svc_add_device(call: ServiceCall) -> None:
         uuid, model = call.data["uuid"], call.data["model"]
+        if len(uuid) != (8 if model == MODEL_SCENE else 6):
+            raise HomeAssistantError(
+                "Odace SFSP : UUID de 6 caractères hexadécimaux attendu (8 pour une scène)"
+            )
         await _coordinator_for(hass, uuid).async_add_device(
             {
                 "uuid": uuid,

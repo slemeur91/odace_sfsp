@@ -8,6 +8,33 @@ Le détail de chaque version, bêtas comprises, est disponible sur la page des [
 
 Version diffusée en bêta.
 
+### 2.1.1_beta2 - 2026-10-10
+
+#### Corrections
+
+- Scènes : elles peuvent enfin être envoyées. Leur identifiant fait 8 caractères hexadécimaux, alors que les formulaires, l'import et les services n'en acceptaient que 6 : la trame, trop courte, était rejetée avant l'émission.
+- Ajout d'un contrôleur local : l'interface proposée par défaut est toujours une interface détectée.
+- Désappairage : le module n'est supprimé de Home Assistant que s'il confirme (code 13). La suppression forcée après 15 secondes est retirée.
+- Désappairage : une seule trame est envoyée par appui. Si le module répond « associé » (code 12), il est conservé ; la seconde trame envoyée auparavant ne pouvait pas être acceptée, le module n'étant plus en apprentissage.
+- Désappairage : la réponse du module est guettée dès le début de l'émission. Une confirmation arrivée pendant l'envoi n'est plus manquée.
+- Association : un appui sur le bouton d'un module déjà associé ne déclenche plus l'envoi d'une trame d'association, qui le désassociait de Home Assistant.
+
+#### Ajouts
+
+- Module « à associer » : la trame d'association n'est envoyée, à l'appui sur le bouton, qu'à un module ajouté ou marqué à réassocier depuis moins de 30 minutes.
+- Menu **Réassocier un module**, pour un module réinitialisé ou qui n'obéit plus.
+- Alerte dans **Paramètres → Réparations** quand une trame d'association a désassocié un module ; elle disparaît dès que le module est réassocié.
+- Désappairage : écran d'attente qui affiche le résultat (désappairé et supprimé, associé, sans réponse, sans appui).
+- Menu **Rechercher les scènes d'un module** : Home Assistant interroge un module `dcl`, `shutter` ou `generic` et crée une entité pour chaque scène qu'il annonce, avec son type (personnalisée ou Schneider). C'est la méthode du plugin Jeedom.
+- Type de scène réglable dans **Modifier un module**.
+- Module `generic` : décodage des réponses de scènes et de groupes.
+
+#### Évolutions
+
+- Menus traduits : les menus et listes de choix ne sont plus écrits en français dans le code. Ils s'affichent en français ou en anglais selon la langue de Home Assistant. Les menus principaux deviennent des listes de boutons.
+- Suppression d'une scène ou d'un interrupteur : le désappairage n'est plus proposé, seuls les modules commandables étant associés au contrôleur.
+- `strings.json` réaligné sur la traduction française.
+
 ### 2.1.1_beta1 - 2026-10-09
 
 Corrections issues d'un audit du code.

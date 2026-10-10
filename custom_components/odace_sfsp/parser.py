@@ -243,6 +243,15 @@ def _parse_generic(trame: str, cf: str, uuid: str, string: str, result: dict) ->
     elif cf == "21":
         data["type"] = "binding"
         string += " binding"
+    elif cf == "2b":
+        data["type"] = "group"
+        data["groups"] = [trame[38:46], trame[46:54]]
+        string += f" group {data['groups']}"
+    elif cf in ("2c", "2d"):
+        data["type"] = "scene"
+        data["subtype"] = "custom" if cf == "2c" else "schneider"
+        data["scenes"] = [trame[38:46], trame[46:54], trame[54:62]]
+        string += f" {data['subtype']}scene {data['scenes']}"
     return string
 
 
