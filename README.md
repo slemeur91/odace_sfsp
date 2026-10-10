@@ -75,7 +75,7 @@ Lors de la première configuration, l'intégration propose de choisir le protoco
 
 ### Menu de gestion des modules
 
-Depuis **Paramètres → Appareils et services → Schneider Odace SFSP**, cliquer sur **Configurer** pour accéder au menu principal de gestion des modules. Ce menu propose les actions suivantes : ajouter un module, modifier un module, supprimer un module, ainsi que les paramètres avancés et la modification du contrôleur Bluetooth.
+Depuis **Paramètres → Appareils et services → Schneider Odace SFSP**, cliquer sur **Configurer** pour accéder au menu principal de gestion des modules. Ce menu propose les actions suivantes : ajouter, modifier, supprimer ou réassocier un module, rechercher les scènes d'un module, modifier le contrôleur Bluetooth et accéder aux paramètres avancés.
 
 <img src="images/menu-configuration.png" alt="Menu Configurer" width="480">
 
@@ -87,7 +87,7 @@ L'association d'un module Odace SFSP se fait en mode apprentissage :
 2. Dans les 60 s qui suivent, ouvrir le menu **Configurer** et choisir **Ajouter un module**. L'écran liste les modules qui se sont signalés pendant la dernière minute : il faut donc appuyer sur le module **avant** de l'ouvrir. Si la liste est vide, fermer l'écran, appuyer à nouveau sur le module et rouvrir.
 3. Sélectionner le module détecté, qui apparaît avec son UUID et son type. Saisir un nom, vérifier le type (`switch`, `dcl`, `generic`, etc.) et valider.
 
-Pour les modules commandables (`dcl`, `generic`, `shutter`, `plug`), la trame d'association est envoyée automatiquement tant que le module clignote encore. Si le délai est dépassé, appuyer à nouveau sur le module : l'association est alors renvoyée.
+Pour les modules commandables (`dcl`, `generic`, `shutter`, `plug`), la trame d'association est envoyée automatiquement tant que le module clignote encore. Si le délai est dépassé, appuyer à nouveau sur le module : la trame part à l'appui, pendant les 30 minutes qui suivent l'ajout.
 
 Un module peut aussi être ajouté sans mode apprentissage, en choisissant **Saisir manuellement** et en renseignant son UUID (format logs/Jeedom, ou format étiquette du module).
 
@@ -104,16 +104,41 @@ Depuis le menu **Configurer** de l'intégration il est également possible de :
   <img src="images/menu-modification-module-2.png" alt="Modification d'un module étape 2" width="49%" align="top">
 </p>
 
-- **Supprimer un module** : retire le module de l'intégration et supprime l'entité associée.
+- **Supprimer un module** : retire le module de l'intégration et supprime l'entité associée. Pour un module commandable, l'option **Désappairer le module puis supprimer de HA** rompt aussi l'association côté module : un écran d'attente demande d'appuyer une fois sur son bouton, et le module n'est supprimé que s'il confirme le désappairage.
 
 <p>
   <img src="images/menu-suppression-module-1.png" alt="Suppression d'un module étape 1" width="49%" align="top">
   <img src="images/menu-suppression-module-2.png" alt="Suppression d'un module étape 2" width="49%" align="top">
 </p>
 
+### Réassocier un module
+
+La trame d'association est une bascule : elle associe un module libre, mais désassocie un module déjà associé. L'intégration ne l'envoie donc qu'à un module « à associer », c'est-à-dire ajouté ou marqué à réassocier depuis moins de 30 minutes. Un appui sur le bouton d'un module qui fonctionne, par exemple pour lui associer un interrupteur sans fil, ne touche pas à son association avec Home Assistant.
+
+Le menu **Réassocier un module** sert pour un module qui n'obéit plus (réinitialisé, ou associé à un autre contrôleur) :
+
+1. Choisir le module dans la liste et valider.
+2. Appuyer **une fois** sur le bouton physique du module dans les 30 minutes : Home Assistant lui envoie la trame d'association.
+
+Si le module était encore associé, il se désassocie au lieu de s'associer. Une alerte apparaît alors dans **Paramètres → Réparations** : un second appui sur son bouton le réassocie et lève l'alerte.
+
+<img src="images/reassocier-module.png" alt="Réassocier un module" width="480">
+
+### Rechercher les scènes d'un module
+
+Une scène n'est pas un module physique : c'est un identifiant de 8 caractères hexadécimaux mémorisé par les modules, de type personnalisée ou Schneider. Le menu **Rechercher les scènes d'un module** les retrouve :
+
+1. Choisir un module `dcl`, `shutter` ou `generic` déjà enregistré.
+2. Choisir les scènes à rechercher : personnalisées, Schneider, ou les deux.
+3. Home Assistant interroge le module, puis crée une entité `scene` pour chaque scène nouvelle. L'écran suivant affiche les scènes trouvées.
+
+Le type d'une scène se règle ensuite dans **Modifier un module**. Les scènes n'ont pas encore été testées sur du matériel réel.
+
+<img src="images/rechercher-scenes.png" alt="Rechercher les scènes d'un module" width="480">
+
 ### Modification du contrôleur Bluetooth
 
-Si le contrôleur Bluetooth est remplacé, il est possible de mettre à jour son adresse MAC dans la configuration de l'intégration sans avoir à réassocier tous les modules. L'option est disponible dans le menu **Configurer**.
+Le menu **Modifier le contrôleur Bluetooth** permet de choisir un autre adaptateur. L'adresse MAC qui signe les trames est conservée : les modules déjà associés continuent d'obéir au nouveau contrôleur, sans réassociation. Elle se modifie dans les paramètres avancés.
 
 ### Paramètres avancés
 

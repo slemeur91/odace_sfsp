@@ -79,7 +79,7 @@ During the initial setup, the integration asks which protocol to use to talk to 
 
 ### Module management menu
 
-From **Settings → Devices & services → Schneider Odace SFSP**, click **Configure** to open the main module management menu. This menu offers the following actions: add a module, edit a module, remove a module, as well as the advanced settings and the Bluetooth controller change.
+From **Settings → Devices & services → Schneider Odace SFSP**, click **Configure** to open the main module management menu. This menu offers the following actions: add, edit, remove or re-pair a module, search a module's scenes, change the Bluetooth controller and open the advanced settings.
 
 <img src="images/menu-configuration.png" alt="Configure menu" width="480">
 
@@ -91,9 +91,9 @@ An Odace SFSP module is paired in learning mode:
 2. Within the next 60 s, open the **Configure** menu and choose **Add a module**. The screen lists the modules that announced themselves during the last minute, so press the module **before** opening it. If the list is empty, close the screen, press the module again and reopen it.
 3. Select the detected module, shown with its UUID and type. Enter a name, check the type (`switch`, `dcl`, `generic`, etc.) and confirm.
 
-For controllable modules (`dcl`, `generic`, `shutter`, `plug`), the pairing frame is sent automatically as long as the module is still blinking. If the delay has elapsed, press the module again: the pairing frame is then sent again.
+For controllable modules (`dcl`, `generic`, `shutter`, `plug`), the pairing frame is sent automatically as long as the module is still blinking. If the delay has elapsed, press the module again: the frame is sent on the press, during the 30 minutes that follow the addition.
 
-A module can also be added without learning mode, by choosing **Saisir manuellement** (manual entry) and typing its UUID (logs/Jeedom format, or module label format).
+A module can also be added without learning mode, by choosing **Enter manually** and typing its UUID (logs/Jeedom format, or module label format).
 
 <img src="images/menu-ajout-module.png" alt="Add a module menu" width="480">
 
@@ -108,16 +108,41 @@ From the integration's **Configure** menu you can also:
   <img src="images/menu-modification-module-2.png" alt="Editing a module, step 2" width="49%" align="top">
 </p>
 
-- **Remove a module**: removes the module from the integration and deletes the associated entity.
+- **Remove a module**: removes the module from the integration and deletes the associated entity. For a controllable module, the **Unpair the module, then remove from HA** option also breaks the pairing on the module side: a waiting screen asks you to press its button once, and the module is removed only if it confirms unpairing.
 
 <p>
   <img src="images/menu-suppression-module-1.png" alt="Removing a module, step 1" width="49%" align="top">
   <img src="images/menu-suppression-module-2.png" alt="Removing a module, step 2" width="49%" align="top">
 </p>
 
+### Re-pairing a module
+
+The pairing frame is a toggle: it pairs a free module, but unpairs a module that is already paired. The integration therefore only sends it to a module "to be paired", that is, added or marked for re-pairing less than 30 minutes ago. Pressing the button of a working module, for example to pair a wireless switch with it, does not affect its pairing with Home Assistant.
+
+The **Re-pair a module** menu is meant for a module that no longer obeys (reset, or paired with another controller):
+
+1. Choose the module in the list and confirm.
+2. Press the module's physical button **once** within 30 minutes: Home Assistant sends it the pairing frame.
+
+If the module was still paired, it unpairs instead of pairing. An alert then appears in **Settings → Repairs**: a second press on its button pairs it again and clears the alert.
+
+<img src="images/reassocier-module.png" alt="Re-pair a module" width="480">
+
+### Searching a module's scenes
+
+A scene is not a physical module: it is an 8-character hexadecimal identifier stored by the modules, of type custom or Schneider. The **Search a module's scenes** menu finds them:
+
+1. Choose a `dcl`, `shutter` or `generic` module that is already registered.
+2. Choose the scenes to search: custom, Schneider, or both.
+3. Home Assistant queries the module, then creates a `scene` entity for each new scene. The next screen shows the scenes found.
+
+A scene's type can then be changed in **Edit a module**. Scenes have not yet been tested on real hardware.
+
+<img src="images/rechercher-scenes.png" alt="Search a module's scenes" width="480">
+
 ### Changing the Bluetooth controller
 
-If the Bluetooth controller is replaced, its MAC address can be updated in the integration's configuration without having to pair all the modules again. The option is available in the **Configure** menu.
+The **Change the Bluetooth controller** menu lets you choose another adapter. The MAC address that signs the frames is kept: modules that are already paired keep obeying the new controller, without re-pairing. It can be changed in the advanced settings.
 
 ### Advanced settings
 

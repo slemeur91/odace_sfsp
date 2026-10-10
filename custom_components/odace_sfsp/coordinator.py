@@ -87,6 +87,31 @@ UNPAIR_SEND_FAILED = "send_failed"  # la trame n'a pas pu être émise
 UNPAIR_UNKNOWN     = "unknown"      # module inconnu
 
 
+def _hci_is_operational(name: str) -> bool:
+    """Teste si hcitool répond sur cette interface (synchrone, timeout 2 s).
+
+    Échoue pour une interface absente comme pour une interface éteinte (DOWN).
+    """
+    import subprocess  # noqa: PLC0415
+    try:
+        result = subprocess.run(["hcitool", "-i", name, "dev"], capture_output=True, timeout=2)
+        return result.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _hciconfig_up(name: str) -> str:
+    """Rallume une interface HCI (synchrone). Retourne le message d'erreur, vide si OK."""
+    import subprocess  # noqa: PLC0415
+    try:
+        result = subprocess.run(["hciconfig", name, "up"], capture_output=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired) as err:
+        return str(err)
+    if result.returncode != 0:
+        return (result.stderr or result.stdout).decode(errors="ignore").strip() or "échec"
+    return ""
+
+
 class OdaceSFSPCoordinator:
     """Gère le cycle de vie BLE + la persistance des devices.
 
@@ -140,6 +165,8 @@ class OdaceSFSPCoordinator:
         # Résultat attendu par l'écran de désappairage, par UUID
         self._unpair_futures: Dict[str, asyncio.Future] = {}
         self._unpair_confirm_timeout: float = 15.0
+        # Dernière tentative de rallumage de l'interface HCI (voir _power_on_hci)
+        self._last_power_on_attempt: float = 0.0
         # Modules « à associer » : UUID → échéance (voir _AWAITING_PAIR_TTL)
         self._awaiting_pair: Dict[str, float] = {}
         # Horodatage du dernier envoi de trame pair par UUID (anti-tempête re-pairing)
@@ -244,19 +271,8 @@ class OdaceSFSPCoordinator:
         - ``(None, "")`` si aucune interface ne répond.
         """
         import glob  # noqa: PLC0415
-        import subprocess  # noqa: PLC0415
 
-        def _is_hci_operational(name: str) -> bool:
-            """Teste si hcitool répond sur cette interface (timeout 2 s)."""
-            try:
-                result = subprocess.run(
-                    ["hcitool", "-i", name, "dev"],
-                    capture_output=True,
-                    timeout=2,
-                )
-                return result.returncode == 0
-            except (OSError, subprocess.TimeoutExpired):
-                return False
+        _is_hci_operational = _hci_is_operational
 
         def _sysfs_mac(name: str) -> str:
             try:
@@ -603,7 +619,49 @@ class OdaceSFSPCoordinator:
                 self.hci_name,
             )
             await self._resolve_hci_by_mac()
-        return await hci_send(self.hci_index, payload)
+        if await hci_send(self.hci_index, payload):
+            return True
+        # Échec d'émission : l'interface peut exister dans sysfs tout en étant DOWN
+        # (« Network is down »), par exemple quand l'adaptateur a été renuméroté et
+        # qu'il reste une entrée fantôme. Re-tester l'interface et, si une autre
+        # répond, réessayer une fois dessus.
+        previous = self.hci_name
+        await self._resolve_hci_by_mac()
+        if self.hci_name != previous:
+            return await hci_send(self.hci_index, payload)
+        # Aucune autre interface : si la nôtre est éteinte, tenter de la rallumer.
+        if await self.hass.async_add_executor_job(self._power_on_hci):
+            return await hci_send(self.hci_index, payload)
+        return False
+
+    def _power_on_hci(self) -> bool:
+        """Rallume l'interface configurée si elle est éteinte (synchrone, executor).
+
+        Retourne True si l'interface était éteinte et répond de nouveau. Une seule
+        tentative par minute, pour ne pas relancer hciconfig à chaque commande
+        quand l'interface refuse de s'allumer.
+        """
+        import os  # noqa: PLC0415
+        name = self.hci_name
+        if not os.path.exists(f"/sys/class/bluetooth/{name}"):
+            return False  # interface absente : rien à rallumer
+        if _hci_is_operational(name):
+            return False  # elle répond : l'échec d'émission a une autre cause
+        now = time.time()
+        if now - self._last_power_on_attempt < 60.0:
+            return False
+        self._last_power_on_attempt = now
+        _LOGGER.warning("Odace SFSP — %s est éteinte (DOWN) → tentative de rallumage", name)
+        error = _hciconfig_up(name)
+        if error:
+            _LOGGER.error("Odace SFSP — impossible de rallumer %s : %s", name, error)
+            return False
+        time.sleep(1.0)  # laisse le contrôleur terminer son initialisation
+        if _hci_is_operational(name):
+            _LOGGER.warning("Odace SFSP — %s rallumée, la commande est rejouée", name)
+            return True
+        _LOGGER.error("Odace SFSP — %s ne répond toujours pas après rallumage", name)
+        return False
 
     async def async_send_command(self, uuid: str, ac: str, options: Optional[int] = None) -> None:
         """Envoie une commande à un module.

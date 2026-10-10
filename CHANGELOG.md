@@ -14,6 +14,8 @@ Version diffusée en bêta.
 
 - Scènes : elles peuvent enfin être envoyées. Leur identifiant fait 8 caractères hexadécimaux, alors que les formulaires, l'import et les services n'en acceptaient que 6 : la trame, trop courte, était rejetée avant l'émission.
 - Ajout d'un contrôleur local : l'interface proposée par défaut est toujours une interface détectée.
+- Interface `hci` présente mais éteinte (« Network is down ») : après un échec d'émission, l'interface est testée à nouveau et, si une autre interface répond, la commande est rejouée dessus. Auparavant seule la disparition de l'interface était détectée.
+- Interface `hci` éteinte sans autre interface disponible : l'intégration tente de la rallumer (`hciconfig hciX up`, une tentative par minute au plus) puis rejoue la commande.
 - Désappairage : le module n'est supprimé de Home Assistant que s'il confirme (code 13). La suppression forcée après 15 secondes est retirée.
 - Désappairage : une seule trame est envoyée par appui. Si le module répond « associé » (code 12), il est conservé ; la seconde trame envoyée auparavant ne pouvait pas être acceptée, le module n'étant plus en apprentissage.
 - Désappairage : la réponse du module est guettée dès le début de l'émission. Une confirmation arrivée pendant l'envoi n'est plus manquée.
@@ -34,6 +36,11 @@ Version diffusée en bêta.
 - Menus traduits : les menus et listes de choix ne sont plus écrits en français dans le code. Ils s'affichent en français ou en anglais selon la langue de Home Assistant. Les menus principaux deviennent des listes de boutons.
 - Suppression d'une scène ou d'un interrupteur : le désappairage n'est plus proposé, seuls les modules commandables étant associés au contrôleur.
 - `strings.json` réaligné sur la traduction française.
+
+#### Documentation
+
+- README (français et anglais) et wiki : menus **Réassocier un module** et **Rechercher les scènes d'un module**, avec leurs captures ; désappairage ; conservation de l'adresse MAC au changement de contrôleur.
+- Captures du menu principal et des paramètres avancés mises à jour.
 
 ### 2.1.1_beta1 - 2026-10-09
 
