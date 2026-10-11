@@ -55,3 +55,34 @@ bind_device:
       required: true
       example: "472500"
       selector: { text: {} }
+
+test_send:
+  name: Test d'émission (diagnostic)
+  description: >
+    Envoie une commande à un module et retourne la trace de ce qui a été
+    réellement émis par l'adaptateur. Cocher « Renvoyer la réponse » pour lire
+    le compte rendu. Réservé au mode contrôleur Bluetooth local.
+  fields:
+    uuid:
+      required: true
+      example: "472500"
+      selector: { text: {} }
+    ac:
+      required: false
+      default: "on"
+      selector:
+        select:
+          options: ["on", "off", "toggle", "up", "down", "stop"]
+    method:
+      required: false
+      selector:
+        select:
+          options: [hcitool, mgmt]
+    duration:
+      required: false
+      default: 0.5
+      selector: { number: { min: 0.2, max: 10, step: 0.1, unit_of_measurement: s } }
+    interval_ms:
+      required: false
+      default: 100
+      selector: { number: { min: 20, max: 2000, step: 10, unit_of_measurement: ms } }

@@ -47,6 +47,7 @@
     },
     "error": {
       "invalid_mac": "Invalid MAC address — expected format: AA:BB:CC:DD:EE:FF",
+      "invalid_service": "Invalid service name — enter the service declared in the ESPHome firmware (e.g. odace_send)",
       "invalid_uuid": "Invalid UUID — 6 hex characters required (e.g. 9c0300), 8 for a scene. Check that the bytes are not reversed."
     }
   },
@@ -83,10 +84,11 @@
       },
       "advanced_settings": {
         "title": "Jeedom key / Controller MAC",
-        "description": "**Current Jeedom key:** `{current_key}`\n**Current controller MAC:** `{current_mac}`\n\nChanging the Jeedom key requires re-pairing all modules. Leave a field empty to keep the current value.",
+        "description": "**Current Jeedom key:** `{current_key}`\n**Current controller MAC:** `{current_mac}`\n\nChanging the Jeedom key requires re-pairing all modules. Leave a field empty to keep the current value.\n\n**Transmission method** (local Bluetooth controller only): \"Linux kernel\" transmits without the hcitool tool and without interrupting scanning; if it fails, the integration falls back to hcitool.",
         "data": {
           "jeedom_key": "Jeedom key (leave empty to keep current)",
-          "mac": "BLE controller MAC (HCI controller or ESP32 — leave empty to keep current)"
+          "mac": "BLE controller MAC (HCI controller or ESP32 — leave empty to keep current)",
+          "hci_method": "Transmission method (local controller)"
         }
       },
       "import_export": {
@@ -158,12 +160,17 @@
         "data": {
           "uuid": "Module"
         }
+      },
+      "unpair_instructions": {
+        "title": "Unpairing in progress"
       }
     },
     "error": {
       "already_exists": "A module with this UUID already exists",
+      "invalid_json": "Invalid list — paste the export lines, or a complete JSON object in braces",
       "invalid_key": "Invalid Jeedom key — 24 hex characters required",
       "invalid_mac": "Invalid MAC address — expected format: AA:BB:CC:DD:EE:FF",
+      "invalid_service": "Invalid service name — enter the service declared in the ESPHome firmware (e.g. odace_send)",
       "invalid_uuid": "Invalid UUID — 6 hex characters required (e.g. 9c0300), 8 for a scene. Check that the bytes are not reversed.",
       "send_failed": "The request could not be sent to the module (see the logs)"
     },
@@ -213,6 +220,12 @@
         "custom": "Custom",
         "schneider": "Schneider"
       }
+    },
+    "hci_method": {
+      "options": {
+        "hcitool": "hcitool — direct commands to the adapter (historical)",
+        "mgmt": "Linux kernel — without hcitool, does not interrupt scanning (experimental)"
+      }
     }
   },
   "issues": {
@@ -241,6 +254,32 @@
     "bind_device": {
       "name": "Bind a module",
       "description": "Sends the BLE pairing frame"
+    },
+    "test_send": {
+      "name": "Transmission test (diagnostic)",
+      "description": "Sends a command to a module and returns the trace of what the adapter actually transmitted. Local Bluetooth controller mode only.",
+      "fields": {
+        "uuid": {
+          "name": "Module UUID",
+          "description": "Module to control, for example a DCL."
+        },
+        "ac": {
+          "name": "Command",
+          "description": "on, off, toggle…"
+        },
+        "method": {
+          "name": "Method",
+          "description": "hcitool or mgmt (kernel). Defaults to the method set in the advanced settings."
+        },
+        "duration": {
+          "name": "Duration",
+          "description": "Broadcast duration in seconds (mgmt method)."
+        },
+        "interval_ms": {
+          "name": "Interval",
+          "description": "Advertising interval in milliseconds (mgmt method)."
+        }
+      }
     }
   }
 }

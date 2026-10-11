@@ -153,7 +153,14 @@ Permet de consulter ou modifier les deux éléments clés hérités de Jeedom :
 - La **JEEDOM_KEY** est la clé de chiffrement utilisée pour signer les trames BLE envoyées aux modules Odace. Elle est propre à chaque installation et peut être récupérée dans les logs de Jeedom.
 - L'**adresse MAC du contrôleur Bluetooth** est l'identifiant utilisé lors de l'association des modules. Il est possible de réutiliser l'adresse MAC du contrôleur Bluetooth Jeedom d'origine avec un autre adaptateur physique — c'est ce qui permet de migrer une installation Jeedom existante vers Home Assistant sans réassocier les modules.
 
-<img src="images/menu-cle-jeedom-mac.png" alt="Clé Jeedom et MAC du contrôleur Bluetooth" width="480">
+Le même écran propose, pour un contrôleur Bluetooth local, la **méthode d'émission** :
+
+- **hcitool** (par défaut) : la méthode d'origine, héritée du plugin Jeedom. Les commandes sont envoyées directement à l'adaptateur.
+- **Noyau Linux** (expérimentale) : les trames sont confiées au noyau, sans `hcitool` et sans interrompre l'écoute Bluetooth de Home Assistant. En cas d'échec, l'intégration se replie sur `hcitool`.
+
+Ce choix n'existe pas en mode ESPHome, qui n'est pas concerné. Les retours sur la méthode Noyau Linux sont les bienvenus : elle a vocation à devenir la méthode par défaut.
+
+<img src="images/menu-cle-jeedom-mac.png" alt="Clé Jeedom, MAC du contrôleur Bluetooth et méthode d'émission" width="480">
 
 **2. Export / Import de la configuration des modules**
 

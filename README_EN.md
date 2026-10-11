@@ -157,7 +157,14 @@ Lets you view or change the two key elements inherited from Jeedom:
 - The **JEEDOM_KEY** is the encryption key used to sign the BLE frames sent to the Odace modules. It is specific to each installation and can be retrieved from the Jeedom logs.
 - The **Bluetooth controller MAC address** is the identifier used when pairing the modules. The MAC address of the original Jeedom Bluetooth controller can be reused with another physical adapter — this is what makes it possible to migrate an existing Jeedom installation to Home Assistant without pairing the modules again.
 
-<img src="images/menu-cle-jeedom-mac.png" alt="Jeedom key and Bluetooth controller MAC" width="480">
+The same screen offers, for a local Bluetooth controller, the **transmission method**:
+
+- **hcitool** (default): the original method, inherited from the Jeedom plugin. Commands are sent directly to the adapter.
+- **Linux kernel** (experimental): frames are handed to the kernel, without `hcitool` and without interrupting Home Assistant's Bluetooth scanning. If it fails, the integration falls back to `hcitool`.
+
+This choice does not exist in ESPHome mode, which is not affected. Feedback on the Linux kernel method is welcome: it is meant to become the default.
+
+<img src="images/menu-cle-jeedom-mac.png" alt="Jeedom key, Bluetooth controller MAC and transmission method" width="480">
 
 **2. Export / Import of the module configuration**
 

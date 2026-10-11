@@ -4,9 +4,30 @@ Toutes les évolutions notables de l'intégration Schneider Odace SFSP sont cons
 
 Le détail de chaque version, bêtas comprises, est disponible sur la page des [releases](https://github.com/slemeur91/odace_sfsp/releases).
 
-## [2.1.1] - en cours
+## [2.2.0] - 2026-10-11
 
-Version diffusée en bêta.
+Le fonctionnement par défaut est celui de la version 2.1.1. Cette version ajoute une seconde méthode d'émission pour le contrôleur Bluetooth local, proposée à titre expérimental.
+
+### Ajouts
+
+- Méthode d'émission **Noyau Linux** (expérimentale), pour le contrôleur Bluetooth local. Les trames sont confiées au noyau par son canal de gestion, celui que BlueZ utilise lui-même, au lieu d'être envoyées par l'outil `hcitool`. L'écoute Bluetooth de Home Assistant n'est plus interrompue à chaque commande, et le noyau choisit seul entre Bluetooth 4 et Bluetooth 5. Le choix se fait dans **Paramètres avancés → Modifier la clé Jeedom / MAC contrôleur**. `hcitool` reste la méthode par défaut ; le mode ESPHome n'est pas concerné.
+- Repli automatique : si l'émission par le noyau échoue, la commande est rejouée par `hcitool` et l'échec est noté dans les journaux.
+- Avec la méthode Noyau Linux, l'état de l'interface est lu et l'interface est rallumée par le noyau, sans `hcitool` ni `hciconfig`.
+- Service de diagnostic `odace_sfsp.test_send` : envoie une commande et retourne la trace de ce que l'adaptateur a réellement émis (trame, type d'annonce, adresse, intervalle).
+
+### Corrections
+
+- Service `bind_device` : un échec d'émission de la trame d'association est signalé par une erreur au lieu d'être passé sous silence.
+- Textes manquants : erreur d'import d'une liste invalide, erreur sur le nom du service ESPHome, titre de l'écran d'attente du désappairage.
+
+### Documentation
+
+- README (français et anglais) et wiki : méthode d'émission, service `test_send`, capture des paramètres avancés mise à jour.
+- Wiki, protocole : les modules exigent les flags en tête de trame ; l'API D-Bus de BlueZ, qui les place après les données fabricant, ne peut pas être utilisée.
+
+## [2.1.1] - 2026-10-11
+
+Version finale, identique à la `2.1.1_beta2`.
 
 ### 2.1.1_beta2 - 2026-10-10
 

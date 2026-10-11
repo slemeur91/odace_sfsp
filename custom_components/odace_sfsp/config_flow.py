@@ -50,6 +50,7 @@ from .const import (
     CONF_ESPHOME_ENTRY_ID,
     CONF_ESPHOME_SERVICE,
     CONF_HCI,
+    CONF_HCI_METHOD,
     CONF_JEEDOM_KEY,
     CONF_MODEL,
     CONF_MQTT_TOPIC,
@@ -60,6 +61,8 @@ from .const import (
     DEFAULT_HCI,
     DEFAULT_MQTT_TOPIC,
     DOMAIN,
+    HCI_METHOD_HCITOOL,
+    HCI_METHODS,
     MODEL_SCENE,
     PAIRABLE_MODELS,
     SCENE_SOURCE_MODELS,
@@ -514,6 +517,9 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
         """Clé Jeedom + MAC contrôleur."""
         current_key = self.entry.data.get(CONF_JEEDOM_KEY, "")
         current_mac = self.entry.data.get(CONF_MAC, "00:00:00:00:00:00")
+        # Méthode d'émission : réglage propre au mode contrôleur Bluetooth local
+        is_hci = self.entry.data.get(CONF_SEND_MODE, SEND_MODE_HCI) == SEND_MODE_HCI
+        current_method = self.entry.data.get(CONF_HCI_METHOD, HCI_METHOD_HCITOOL)
         errors: Dict[str, str] = {}
 
         if user_input is not None:
@@ -529,17 +535,22 @@ class OdaceSFSPOptionsFlow(config_entries.OptionsFlow):
                     new_data[CONF_JEEDOM_KEY] = new_key
                 if new_mac:
                     new_data[CONF_MAC] = new_mac.upper()
+                if is_hci and user_input.get(CONF_HCI_METHOD) in HCI_METHODS:
+                    new_data[CONF_HCI_METHOD] = user_input[CONF_HCI_METHOD]
                 self.hass.config_entries.async_update_entry(self.entry, data=new_data)
                 return self.async_create_entry(title="", data={})
 
+        settings_fields: Dict[Any, Any] = {
+            vol.Optional(CONF_JEEDOM_KEY, default=current_key): str,
+            vol.Optional(CONF_MAC, default=current_mac): str,
+        }
+        if is_hci:
+            settings_fields[vol.Required(CONF_HCI_METHOD, default=current_method)] = _select(
+                "hci_method", list(HCI_METHODS)
+            )
         return self.async_show_form(
             step_id="advanced_settings",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(CONF_JEEDOM_KEY, default=current_key): str,
-                    vol.Optional(CONF_MAC, default=current_mac): str,
-                }
-            ),
+            data_schema=vol.Schema(settings_fields),
             errors=errors,
             description_placeholders={
                 "current_key": current_key or "—",

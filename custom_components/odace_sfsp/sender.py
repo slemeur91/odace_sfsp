@@ -1,15 +1,18 @@
 """Génération et envoi de trames BLE Beagle.
 
-Deux modes d'envoi sont disponibles :
+La construction et la signature des trames (build_frame, craft_payload) sont
+communes à tous les modes d'envoi. Trois moyens d'émission :
 
-- ``async_send`` : envoi via ``hcitool`` sur un contrôleur HCI local
-  (dongle USB sur HAOS, Proxmox, etc.). Utilisé quand CONF_SEND_MODE == "hci".
+- ``async_send`` : contrôleur Bluetooth local (dongle USB sur HAOS, Proxmox…).
+  Deux méthodes : ``hcitool`` (commandes HCI directes, advertising étendu puis
+  legacy) ou le canal de gestion du noyau (voir ``mgmt.py``), avec repli sur
+  hcitool en cas d'échec.
 
-- ``async_send_mqtt`` : publication sur un topic MQTT, l'ESP32 souscrit
-  et diffuse le paquet BLE advertising. Utilisé quand CONF_SEND_MODE == "mqtt".
+- ``async_send_esphome_api`` : appel d'un service déclaré dans le firmware d'un
+  ESP32 ESPHome, qui diffuse la trame.
 
-La construction et le chiffrement des trames (build_frame, craft_payload)
-sont communs aux deux modes.
+- ``async_send_mqtt`` : publication sur un topic MQTT auquel un ESP32 est
+  abonné. Conservé pour les installations existantes.
 """
 from __future__ import annotations
 
@@ -27,6 +30,8 @@ from .const import (
     AC,
     CFTARGET,
     GATEWAY,
+    HCI_METHOD_HCITOOL,
+    HCI_METHOD_MGMT,
     HEADER_FS,
     HEADER_VV,
     SCENES,
@@ -281,8 +286,12 @@ async def _send_legacy(hci_index: int, payload_spaced: str) -> bool:
     return True
 
 
-async def async_send(hci_index: int, payload: str) -> bool:
-    """Envoie la trame via ``hcitool`` : advertising étendu, sinon legacy.
+async def async_send(hci_index: int, payload: str, method: str = HCI_METHOD_HCITOOL) -> bool:
+    """Envoie la trame sur un contrôleur local.
+
+    ``method`` = ``mgmt`` : émission par le canal de gestion du noyau, avec repli
+    sur ``hcitool`` si elle échoue. Sinon ``hcitool`` : advertising étendu, puis
+    legacy.
 
     Acquiert le verrou de l'interface hci<hci_index> avant d'exécuter la
     séquence d'advertising, pour éviter l'interleaving de commandes HCI
@@ -295,6 +304,11 @@ async def async_send(hci_index: int, payload: str) -> bool:
     _LOGGER.info("Send to BLE [HCI hci%d]: %s", hci_index, payload_spaced)
 
     async with _get_hci_lock(hci_index):
+        if method == HCI_METHOD_MGMT:
+            from .mgmt import async_send_mgmt  # noqa: PLC0415
+            if await async_send_mgmt(hci_index, payload):
+                return True
+            _LOGGER.warning("hci%d : émission par le noyau en échec, repli sur hcitool", hci_index)
         status = await _send_extended(hci_index, payload_spaced)
         if status == 0:
             return True

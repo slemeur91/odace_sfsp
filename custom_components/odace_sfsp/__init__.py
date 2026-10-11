@@ -7,7 +7,7 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv, device_registry as dr
 
@@ -16,6 +16,7 @@ from .const import (
     CONF_ESPHOME_ENTRY_ID,
     CONF_ESPHOME_SERVICE,
     CONF_HCI,
+    CONF_HCI_METHOD,
     CONF_JEEDOM_KEY,
     CONF_MAC,
     CONF_MQTT_TOPIC,
@@ -24,6 +25,8 @@ from .const import (
     DEFAULT_HCI,
     DEFAULT_MQTT_TOPIC,
     DOMAIN,
+    HCI_METHOD_HCITOOL,
+    HCI_METHODS,
     MODEL_SCENE,
     SEND_MODE_HCI,
     SUPPORTED_MODELS,
@@ -99,6 +102,16 @@ _SERVICE_SCHEMAS = {
     ),
     "remove_device": vol.Schema({vol.Required("uuid"): _UUID}),
     "bind_device": vol.Schema({vol.Required("uuid"): _UUID}),
+    # Diagnostic : envoie une commande et retourne la trace de ce qui a été émis
+    "test_send": vol.Schema(
+        {
+            vol.Required("uuid"): _UUID,
+            vol.Optional("ac", default="on"): vol.In(list(AC)),
+            vol.Optional("method"): vol.In(list(HCI_METHODS)),
+            vol.Optional("duration", default=0.5): vol.All(vol.Coerce(float), vol.Range(min=0.2, max=10)),
+            vol.Optional("interval_ms", default=100): vol.All(vol.Coerce(int), vol.Range(min=20, max=2000)),
+        }
+    ),
 }
 
 
@@ -153,7 +166,26 @@ def _async_register_services(hass: HomeAssistant) -> None:
 
     async def _svc_bind_device(call: ServiceCall) -> None:
         """Envoie la trame de pairing pour un périphérique déjà connu."""
-        await _coordinator_for(hass, call.data["uuid"]).async_send_pair(call.data["uuid"])
+        if not await _coordinator_for(hass, call.data["uuid"]).async_send_pair(call.data["uuid"]):
+            raise HomeAssistantError(
+                f"Odace SFSP : la trame d'association n'a pas pu être envoyée au module"
+                f" {call.data['uuid']} (voir les journaux)"
+            )
+
+    async def _svc_test_send(call: ServiceCall) -> ServiceResponse:
+        """Diagnostic — envoie une commande et retourne la trace de l'émission."""
+        report = await _coordinator_for(hass, call.data["uuid"]).async_test_send(
+            call.data["uuid"], call.data["ac"], call.data.get("method"),
+            call.data["duration"], call.data["interval_ms"],
+        )
+        _LOGGER.info("Odace SFSP test d'émission : %s", report)
+        return report if call.return_response else None
+
+    hass.services.async_register(
+        DOMAIN, "test_send", _svc_test_send,
+        schema=_SERVICE_SCHEMAS["test_send"],
+        supports_response=SupportsResponse.OPTIONAL,
+    )
 
     handlers = {
         "send_command": _svc_send_command,
@@ -185,6 +217,7 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
     if (
         send_mode != coord.send_mode
         or (send_mode == SEND_MODE_HCI and data.get(CONF_HCI, DEFAULT_HCI) != coord.hci_name)
+        or data.get(CONF_HCI_METHOD, HCI_METHOD_HCITOOL) != coord.hci_method
         or data.get(CONF_MAC, "00:00:00:00:00:00") != coord.dongle_mac
         or data.get(CONF_MQTT_TOPIC, DEFAULT_MQTT_TOPIC) != coord.mqtt_topic
         or data.get(CONF_JEEDOM_KEY, "") != coord.jeedom_key

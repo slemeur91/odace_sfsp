@@ -1,12 +1,18 @@
-"""Coordinator : écoute BLE passive + envoi HCI (dongle USB) ou MQTT (ESP32).
+"""Coordinator : écoute BLE passive, envoi des trames et gestion des modules.
 
-La réception BLE (HA Bluetooth API) est identique dans les deux modes.
-Seul l'envoi diffère :
-  - SEND_MODE_HCI  → craft_payload + hcitool   (dongle USB local)
-  - SEND_MODE_MQTT → craft_payload + MQTT pub  (ESP32 via ESPHome)
+La réception (API Bluetooth de Home Assistant) est identique dans tous les modes.
+Seul l'envoi diffère, selon CONF_SEND_MODE :
+  - SEND_MODE_HCI         → contrôleur Bluetooth local. La trame est émise par
+                            hcitool (défaut) ou par le canal de gestion du noyau,
+                            selon CONF_HCI_METHOD.
+  - SEND_MODE_ESPHOME_API → ESP32 via un service de l'API native ESPHome.
+  - SEND_MODE_MQTT        → ESP32 via MQTT (installations existantes uniquement).
 
-Le mode est déterminé par la clé CONF_SEND_MODE dans la config entry.
-Les installations existantes sans CONF_SEND_MODE utilisent le mode HCI par défaut.
+Les installations sans CONF_SEND_MODE utilisent le mode HCI par défaut.
+
+Le coordinator gère aussi : la liste des modules et sa persistance, l'association
+(modules « à associer »), le désappairage, la recherche de scènes et le suivi de
+l'interface HCI (renumérotation, interface éteinte).
 """
 from __future__ import annotations
 
@@ -42,6 +48,7 @@ from .const import (
     CONF_ESPHOME_ENTRY_ID,
     CONF_ESPHOME_SERVICE,
     CONF_HCI,
+    CONF_HCI_METHOD,
     CONF_JEEDOM_KEY,
     CONF_MAC,
     CONF_MQTT_TOPIC,
@@ -49,6 +56,9 @@ from .const import (
     DEFAULT_ESPHOME_SERVICE,
     DEFAULT_MQTT_TOPIC,
     DOMAIN,
+    HCI_METHOD_HCITOOL,
+    HCI_METHOD_MGMT,
+    HCI_METHODS,
     MANUFACTURER_ID,
     PAIRABLE_MODELS,
     SCENE_QUERY_AC,
@@ -113,11 +123,10 @@ def _hciconfig_up(name: str) -> str:
 
 
 class OdaceSFSPCoordinator:
-    """Gère le cycle de vie BLE + la persistance des devices.
+    """Gère le cycle de vie BLE, l'envoi des trames et la persistance des modules.
 
-    Supporte deux modes d'envoi :
-    - HCI  : dongle USB local (HAOS, Proxmox, VM) via hcitool
-    - MQTT : ESP32 via ESPHome Bluetooth Proxy + publication MQTT
+    Trois modes d'envoi (voir l'en-tête du module) : contrôleur local (hcitool ou
+    noyau), ESPHome API, MQTT.
     """
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -140,6 +149,8 @@ class OdaceSFSPCoordinator:
         else:
             self.hci_name  = ""
             self.hci_index = 0
+        # Méthode d'émission locale : hcitool (défaut) ou canal de gestion du noyau
+        self.hci_method: str = entry.data.get(CONF_HCI_METHOD, HCI_METHOD_HCITOOL)
         # MAC physique de l'adaptateur (distincte de dongle_mac, qui signe les trames)
         self.adapter_mac: str = entry.data.get(CONF_ADAPTER_MAC, "")
 
@@ -272,7 +283,7 @@ class OdaceSFSPCoordinator:
         """
         import glob  # noqa: PLC0415
 
-        _is_hci_operational = _hci_is_operational
+        _is_hci_operational = self._interface_operational
 
         def _sysfs_mac(name: str) -> str:
             try:
@@ -619,7 +630,7 @@ class OdaceSFSPCoordinator:
                 self.hci_name,
             )
             await self._resolve_hci_by_mac()
-        if await hci_send(self.hci_index, payload):
+        if await hci_send(self.hci_index, payload, self.hci_method):
             return True
         # Échec d'émission : l'interface peut exister dans sysfs tout en étant DOWN
         # (« Network is down »), par exemple quand l'adaptateur a été renuméroté et
@@ -628,36 +639,60 @@ class OdaceSFSPCoordinator:
         previous = self.hci_name
         await self._resolve_hci_by_mac()
         if self.hci_name != previous:
-            return await hci_send(self.hci_index, payload)
+            return await hci_send(self.hci_index, payload, self.hci_method)
         # Aucune autre interface : si la nôtre est éteinte, tenter de la rallumer.
         if await self.hass.async_add_executor_job(self._power_on_hci):
-            return await hci_send(self.hci_index, payload)
+            return await hci_send(self.hci_index, payload, self.hci_method)
         return False
+
+    def _interface_operational(self, name: str) -> bool:
+        """L'interface existe-t-elle et répond-elle ? (synchrone, executor)
+
+        Avec la méthode d'émission « noyau », l'état est lu par le canal de
+        gestion, sans hcitool. hcitool ne sert que de secours si ce canal est
+        inutilisable, ou quand c'est la méthode d'émission configurée.
+        """
+        if self.hci_method == HCI_METHOD_MGMT:
+            from .mgmt import controller_is_powered  # noqa: PLC0415
+            powered = controller_is_powered(hci_index_from_name(name))
+            if powered is not None:
+                return powered
+        return _hci_is_operational(name)
+
+    def _interface_power_on(self, name: str) -> str:
+        """Rallume l'interface. Retourne le message d'erreur, vide si OK. (synchrone)"""
+        if self.hci_method == HCI_METHOD_MGMT:
+            from .mgmt import controller_power_on  # noqa: PLC0415
+            error = controller_power_on(hci_index_from_name(name))
+            if not error:
+                return ""
+            _LOGGER.debug("Odace SFSP — rallumage de %s par le noyau refusé (%s), essai hciconfig", name, error)
+        return _hciconfig_up(name)
 
     def _power_on_hci(self) -> bool:
         """Rallume l'interface configurée si elle est éteinte (synchrone, executor).
 
         Retourne True si l'interface était éteinte et répond de nouveau. Une seule
-        tentative par minute, pour ne pas relancer hciconfig à chaque commande
+        tentative par minute, pour ne pas relancer le rallumage à chaque commande
         quand l'interface refuse de s'allumer.
         """
         import os  # noqa: PLC0415
         name = self.hci_name
         if not os.path.exists(f"/sys/class/bluetooth/{name}"):
             return False  # interface absente : rien à rallumer
-        if _hci_is_operational(name):
+        if self._interface_operational(name):
             return False  # elle répond : l'échec d'émission a une autre cause
         now = time.time()
         if now - self._last_power_on_attempt < 60.0:
             return False
         self._last_power_on_attempt = now
         _LOGGER.warning("Odace SFSP — %s est éteinte (DOWN) → tentative de rallumage", name)
-        error = _hciconfig_up(name)
+        error = self._interface_power_on(name)
         if error:
             _LOGGER.error("Odace SFSP — impossible de rallumer %s : %s", name, error)
             return False
         time.sleep(1.0)  # laisse le contrôleur terminer son initialisation
-        if _hci_is_operational(name):
+        if self._interface_operational(name):
             _LOGGER.warning("Odace SFSP — %s rallumée, la commande est rejouée", name)
             return True
         _LOGGER.error("Odace SFSP — %s ne répond toujours pas après rallumage", name)
@@ -704,6 +739,60 @@ class OdaceSFSPCoordinator:
         # l'état affiché de façon optimiste par l'entité.
         forget_dedupe(uuid)
         _LOGGER.info("Odace SFSP TX [%s] uuid=%s ac=%s options=%s", self.send_mode, uuid, ac, options)
+
+    async def async_test_send(
+        self, uuid: str, ac: str, method: str | None, duration: float, interval_ms: int,
+    ) -> Dict[str, Any]:
+        """Diagnostic — envoie une commande et retourne ce qui a été émis.
+
+        Utilisé par le service ``test_send``. Même trame et même signature que
+        ``async_send_command``. ``method`` choisit le moyen d'émission (par
+        défaut celui configuré). Le compte rendu contient la trace HCI : les
+        commandes réellement passées à l'adaptateur. L'état de l'entité n'est pas
+        modifié : c'est l'annonce du module qui le mettra à jour.
+        """
+        from .mgmt import HciTrace, async_send_mgmt_report  # noqa: PLC0415
+        from .sender import _get_hci_lock  # noqa: PLC0415
+
+        uuid   = uuid.lower()
+        device = self.devices.get(uuid)
+        if device is None:
+            raise HomeAssistantError(f"Odace SFSP : module {uuid} inconnu")
+        if self.send_mode != SEND_MODE_HCI:
+            raise HomeAssistantError(
+                "Odace SFSP : ce diagnostic ne concerne que le mode contrôleur Bluetooth local"
+            )
+        method = method if method in HCI_METHODS else self.hci_method
+        device_for_payload: Dict[str, Any] = {"uuid": device["uuid"].upper(), "model": device["model"]}
+        if device.get("type"):
+            device_for_payload["type"] = device["type"]
+        payload = craft_payload(
+            device_for_payload, "advertisement", self.jeedom_key, self.dongle_mac, {"ac": ac},
+        )
+        if not payload:
+            raise HomeAssistantError("Odace SFSP : trame impossible à construire (voir les journaux)")
+        forget_dedupe(uuid)  # la réponse du module doit remonter même si l'état est inchangé
+
+        trace = HciTrace(self.hci_index)
+        trace.start()
+        try:
+            if method == HCI_METHOD_HCITOOL:
+                # Chemin normal, sans repli (il prend lui-même le verrou)
+                report: Dict[str, Any] = {"success": await hci_send(self.hci_index, payload, HCI_METHOD_HCITOOL)}
+            else:
+                # Canal de gestion seul, sans repli sur hcitool, pour voir son résultat propre
+                async with _get_hci_lock(self.hci_index):
+                    report = await async_send_mgmt_report(
+                        self.hci_index, payload, duration=duration, interval_ms=interval_ms,
+                    )
+            await asyncio.sleep(0.2)  # laisse arriver les dernières commandes (arrêt de l'annonce)
+        finally:
+            hci_trace = trace.stop()
+        report.update({
+            "adapter": self.hci_name, "method": method, "configured_method": self.hci_method,
+            "uuid": uuid, "ac": ac, "payload": payload, "hci_trace": hci_trace,
+        })
+        return report
 
     async def async_send_pair(self, uuid: str) -> bool:
         """Envoie la trame de pairing à un périphérique commandable.

@@ -24,6 +24,12 @@ CONF_NAME = "name"
 
 DEFAULT_HCI = "hci0"
 
+# Méthode d'émission en mode contrôleur local
+CONF_HCI_METHOD = "hci_method"
+HCI_METHOD_HCITOOL = "hcitool"  # commandes HCI brutes (historique, valeur par défaut)
+HCI_METHOD_MGMT = "mgmt"        # canal de gestion du noyau, sans hcitool
+HCI_METHODS = (HCI_METHOD_HCITOOL, HCI_METHOD_MGMT)
+
 # Mode d'envoi des trames BLE
 CONF_SEND_MODE = "send_mode"
 SEND_MODE_HCI         = "hci"          # Dongle USB local (HAOS, Proxmox, etc.) — hcitool
